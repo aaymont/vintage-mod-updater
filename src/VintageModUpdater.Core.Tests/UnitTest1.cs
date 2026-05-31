@@ -381,8 +381,8 @@ public sealed class SecurityHardeningTests
         {
           "mod": {
             "releases": [
-              { "modversion": "0.3.2" },
-              { "modversion": "0.3.1" }
+              { "modversion": "0.4.2" },
+              { "modversion": "0.4.1" }
             ]
           },
           "statuscode": "200"
@@ -404,10 +404,10 @@ public sealed class SecurityHardeningTests
         };
         var client = new ModDbClient(httpClient);
 
-        var status = await client.CheckUpdaterAppUpdateAsync("0.3.1");
+        var status = await client.CheckUpdaterAppUpdateAsync("0.4.1");
 
         Assert.True(status.UpdateAvailable);
-        Assert.Equal("0.3.2", status.LatestVersion);
+        Assert.Equal("0.4.2", status.LatestVersion);
         Assert.Equal("https://mods.vintagestory.at/vsmu", status.ModPageUrl);
     }
 

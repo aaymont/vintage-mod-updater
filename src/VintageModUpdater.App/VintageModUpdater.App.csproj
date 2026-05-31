@@ -5,7 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.4.0</Version>
+    <Version>0.4.2</Version>
     <BeautyLibsDir>./lib</BeautyLibsDir>
     <BeautyOnPublishOnly>true</BeautyOnPublishOnly>
     <BeautyUsePatch>true</BeautyUsePatch>
