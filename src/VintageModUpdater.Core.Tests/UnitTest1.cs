@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Text;
 using VintageModUpdater.Core;
 
@@ -47,6 +48,38 @@ public sealed class SecurityHardeningTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             installer.InstallUpdateAsync(installedMod, update, modsPath));
         Assert.Contains("downloaded archive targets", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CreateBackupAsync_AllowsValidUnixModsPath()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        using var temp = new TempDirectory();
+        var modsPath = Path.Combine(temp.Path, "Mods");
+        Directory.CreateDirectory(modsPath);
+
+        var installedPath = Path.Combine(modsPath, "examplemod.zip");
+        await File.WriteAllTextAsync(installedPath, "installed");
+
+        var installedMod = new InstalledMod(
+            Identifier: "examplemod",
+            Name: "Example Mod",
+            Version: "1.0.0",
+            Path: installedPath,
+            FileName: "examplemod.zip",
+            IsDirectory: false,
+            Authors: Array.Empty<string>(),
+            GameVersions: Array.Empty<string>(),
+            Error: null);
+
+        var service = new BackupService();
+        var backup = await service.CreateBackupAsync(installedMod, modsPath);
+
+        Assert.Equal("examplemod", backup.ModId);
     }
 
     [Fact]

@@ -31,11 +31,16 @@ internal static class PathGuard
     {
         var normalized = NormalizePath(modsPath);
         var pathRoot = Path.GetPathRoot(normalized);
-        var normalizedWithoutTrailing = normalized.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var rootWithoutTrailing = pathRoot?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedWithoutTrailing = TrimTrailingSeparators(normalized);
 
-        if (string.IsNullOrWhiteSpace(rootWithoutTrailing)
-            || normalizedWithoutTrailing.Equals(rootWithoutTrailing, PathComparison))
+        if (string.IsNullOrWhiteSpace(pathRoot))
+        {
+            throw new InvalidOperationException("Refusing to modify files at a filesystem root path.");
+        }
+
+        var normalizedRoot = NormalizePath(pathRoot);
+        var normalizedRootWithoutTrailing = TrimTrailingSeparators(normalizedRoot);
+        if (normalizedWithoutTrailing.Equals(normalizedRootWithoutTrailing, PathComparison))
         {
             throw new InvalidOperationException("Refusing to modify files at a filesystem root path.");
         }
@@ -91,6 +96,12 @@ internal static class PathGuard
         }
 
         return value + Path.DirectorySeparatorChar;
+    }
+
+    private static string TrimTrailingSeparators(string path)
+    {
+        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.IsNullOrEmpty(trimmed) ? path : trimmed;
     }
 
     private static StringComparison PathComparison =>
