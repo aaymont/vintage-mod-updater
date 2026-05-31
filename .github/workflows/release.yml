@@ -74,7 +74,13 @@ jobs:
           -p:RestoreConfigFile=NuGet.config
           -p:PublishSingleFile=false
           -p:PublishReadyToRun=false
+          -p:DebugSymbols=false
           -o "artifacts/publish/${{ matrix.artifact_name }}"
+
+      - name: Clean publish artifacts
+        run: |
+          Get-ChildItem "artifacts/publish/${{ matrix.artifact_name }}" -Recurse -Filter *.bak |
+            Remove-Item -Force
 
       - name: Package Windows archive
         if: matrix.package_type == 'zip'

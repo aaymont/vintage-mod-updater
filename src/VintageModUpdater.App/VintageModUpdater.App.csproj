@@ -5,12 +5,16 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <BeautyLibsDir>./lib</BeautyLibsDir>
+    <BeautyOnPublishOnly>true</BeautyOnPublishOnly>
+    <BeautyUsePatch>true</BeautyUsePatch>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.16" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.16" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.16" />
+    <PackageReference Include="nulastudio.NetBeauty" Version="2.1.5.0" />
   </ItemGroup>
 
   <ItemGroup>
