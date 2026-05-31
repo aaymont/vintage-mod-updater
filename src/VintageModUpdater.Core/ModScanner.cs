@@ -112,7 +112,23 @@ public sealed class ModScanner
 
     internal static bool TryReadZipModIdentifier(string zipPath, out string? identifier, out string? error)
     {
+        if (TryReadZipModMetadata(zipPath, out identifier, out _, out error))
+        {
+            return true;
+        }
+
         identifier = null;
+        return false;
+    }
+
+    internal static bool TryReadZipModMetadata(
+        string zipPath,
+        out string? identifier,
+        out string? version,
+        out string? error)
+    {
+        identifier = null;
+        version = null;
         error = null;
 
         try
@@ -146,6 +162,7 @@ public sealed class ModScanner
                 return false;
             }
 
+            version = ReadString(root, "version");
             return true;
         }
         catch (Exception ex)

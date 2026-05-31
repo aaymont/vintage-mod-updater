@@ -21,97 +21,139 @@ public sealed class ModUpdateInstaller
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("VintageModUpdater/0.1");
     }
 
-    public async Task<BackupEntry> InstallUpdateAsync(
+    public async Task<ModUpdateInstallResult> InstallUpdateAsync(
         InstalledMod mod,
         ModUpdateStatus update,
         string modsPath,
         CancellationToken cancellationToken = default)
     {
-        if (!update.HasUpdate)
-        {
-            throw new InvalidOperationException("This mod does not have a downloadable compatible update.");
-        }
+        using var log = UpdateOperationLog.Create(modsPath, mod.Identifier);
+        log.WriteStep($"Starting update for {mod.Name} ({mod.Identifier})");
+        log.WriteStep($"Current install: {mod.Path}");
+        log.WriteStep($"Current version: {mod.Version ?? "unknown"}");
+        log.WriteStep($"Target version: {update.AvailableVersion ?? "unknown"}");
+        log.WriteStep($"Download URL: {update.DownloadUrl ?? "(missing)"}");
+        log.WriteStep($"Download file name: {update.DownloadFileName ?? "(missing)"}");
 
-        var downloadUri = new Uri(update.DownloadUrl!);
-        if (!downloadUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-            || !downloadUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Updates must be downloaded from the official Vintage Story ModDB.");
-        }
-
-        PathGuard.EnsureSafeModsPathForWrite(modsPath);
-        var safeModsPath = PathGuard.NormalizePath(modsPath);
-        PathGuard.EnsureContained(
-            safeModsPath,
-            mod.Path,
-            "The selected mod path is outside the configured Mods directory.");
-        PathGuard.EnsureNoReparsePointsUnderRoot(
-            safeModsPath,
-            mod.Path,
-            "Refusing to update mods through a symbolic link or junction path.");
-        Directory.CreateDirectory(safeModsPath);
-
-        var downloadFileName = Path.GetFileName(update.DownloadFileName);
-        if (string.IsNullOrWhiteSpace(downloadFileName))
-        {
-            throw new InvalidOperationException("The ModDB update did not include a valid file name.");
-        }
-
-        var tempPath = Path.Combine(Path.GetTempPath(), $"vintage-mod-updater-{Guid.NewGuid():N}.zip");
         try
         {
-            using (var response = await _httpClient
-                .GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                .ConfigureAwait(false))
+            if (!update.HasUpdate)
             {
-                response.EnsureSuccessStatusCode();
-                var finalUri = response.RequestMessage?.RequestUri ?? downloadUri;
-                if (!finalUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-                    || !finalUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidOperationException("Update downloads must resolve to the official secure Vintage Story ModDB host.");
-                }
-
-                if (response.Content.Headers.ContentLength is long contentLength
-                    && contentLength > MaxDownloadBytes)
-                {
-                    throw new InvalidOperationException("The update download is larger than the supported size limit.");
-                }
-
-                await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                await CopyToTempFileWithLimitAsync(source, tempPath, cancellationToken).ConfigureAwait(false);
+                throw new InvalidOperationException("This mod does not have a downloadable compatible update.");
             }
 
-            ValidateDownloadedArchive(mod.Identifier, tempPath);
+            var downloadUri = new Uri(update.DownloadUrl!);
+            if (!downloadUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                || !downloadUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Updates must be downloaded from the official Vintage Story ModDB.");
+            }
 
-            var backup = await _backupService.CreateBackupAsync(mod, safeModsPath, cancellationToken).ConfigureAwait(false);
-            var destinationPath = Path.Combine(safeModsPath, downloadFileName);
+            PathGuard.EnsureSafeModsPathForWrite(modsPath);
+            var safeModsPath = PathGuard.NormalizePath(modsPath);
+            log.WriteStep($"Mods directory: {safeModsPath}");
             PathGuard.EnsureContained(
                 safeModsPath,
-                destinationPath,
-                "The resolved destination path is outside the configured Mods directory.");
+                mod.Path,
+                "The selected mod path is outside the configured Mods directory.");
             PathGuard.EnsureNoReparsePointsUnderRoot(
                 safeModsPath,
-                destinationPath,
+                mod.Path,
                 "Refusing to update mods through a symbolic link or junction path.");
+            Directory.CreateDirectory(safeModsPath);
 
-            PreserveConflictingDestination(destinationPath, mod.Path, safeModsPath);
-            RemoveInstalledMod(mod, safeModsPath);
-
-            await BackupService.CopyFileAsync(tempPath, destinationPath, overwrite: true, cancellationToken).ConfigureAwait(false);
-
-            return backup;
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
+            var downloadFileName = Path.GetFileName(update.DownloadFileName);
+            if (string.IsNullOrWhiteSpace(downloadFileName))
             {
-                File.Delete(tempPath);
+                throw new InvalidOperationException("The ModDB update did not include a valid file name.");
             }
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"vintage-mod-updater-{Guid.NewGuid():N}.zip");
+            log.WriteStep($"Temporary download path: {tempPath}");
+            try
+            {
+                log.WriteStep("Downloading update from ModDB...");
+                using (var response = await _httpClient
+                    .GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    response.EnsureSuccessStatusCode();
+                    var finalUri = response.RequestMessage?.RequestUri ?? downloadUri;
+                    log.WriteStep($"Download resolved to: {finalUri}");
+                    if (!finalUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                        || !finalUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("Update downloads must resolve to the official secure Vintage Story ModDB host.");
+                    }
+
+                    if (response.Content.Headers.ContentLength is long contentLength
+                        && contentLength > MaxDownloadBytes)
+                    {
+                        throw new InvalidOperationException("The update download is larger than the supported size limit.");
+                    }
+
+                    await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                    await CopyToTempFileWithLimitAsync(source, tempPath, cancellationToken).ConfigureAwait(false);
+                }
+
+                log.WriteStep("Download completed. Validating archive...");
+                var installedVersion = ValidateDownloadedArchive(mod.Identifier, update.AvailableVersion, tempPath);
+                log.WriteStep($"Archive validated. Version in archive: {installedVersion ?? "unknown"}");
+
+                log.WriteStep("Creating backup of the installed mod...");
+                var backup = await _backupService.CreateBackupAsync(mod, safeModsPath, cancellationToken).ConfigureAwait(false);
+                log.WriteStep($"Backup created at: {backup.BackupPath}");
+
+                var destinationPath = Path.Combine(safeModsPath, downloadFileName);
+                log.WriteStep($"Install destination: {destinationPath}");
+                PathGuard.EnsureContained(
+                    safeModsPath,
+                    destinationPath,
+                    "The resolved destination path is outside the configured Mods directory.");
+                PathGuard.EnsureNoReparsePointsUnderRoot(
+                    safeModsPath,
+                    destinationPath,
+                    "Refusing to update mods through a symbolic link or junction path.");
+
+                PreserveConflictingDestination(destinationPath, mod.Path, safeModsPath, log);
+                log.WriteStep($"Removing previous install at: {mod.Path}");
+                RemoveInstalledMod(mod, safeModsPath);
+
+                log.WriteStep("Copying validated update into the Mods directory...");
+                await BackupService.CopyFileAsync(tempPath, destinationPath, overwrite: true, cancellationToken).ConfigureAwait(false);
+                log.WriteStep("Install copy completed.");
+
+                if (!File.Exists(destinationPath))
+                {
+                    throw new InvalidOperationException(
+                        $"The update appeared to finish, but the destination file was not found: {destinationPath}");
+                }
+
+                log.WriteSuccess(destinationPath, installedVersion);
+                return new ModUpdateInstallResult(backup, destinationPath, installedVersion, log.LogPath);
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                    log.WriteStep("Temporary download file deleted.");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            log.WriteFailure(ex);
+            ex.Data["LogPath"] = log.LogPath;
+            throw;
         }
     }
 
-    private static void PreserveConflictingDestination(string destinationPath, string currentPath, string modsPath)
+    private static void PreserveConflictingDestination(
+        string destinationPath,
+        string currentPath,
+        string modsPath,
+        UpdateOperationLog log)
     {
         PathGuard.EnsureNoReparsePointsUnderRoot(
             modsPath,
@@ -120,11 +162,13 @@ public sealed class ModUpdateInstaller
 
         if (Path.GetFullPath(destinationPath).Equals(Path.GetFullPath(currentPath), StringComparison.OrdinalIgnoreCase))
         {
+            log.WriteStep("Install destination matches the current mod path.");
             return;
         }
 
         if (!File.Exists(destinationPath) && !Directory.Exists(destinationPath))
         {
+            log.WriteStep("No conflicting destination file or folder found.");
             return;
         }
 
@@ -152,6 +196,8 @@ public sealed class ModUpdateInstaller
         {
             File.Move(destinationPath, preservedPath, overwrite: true);
         }
+
+        log.WriteStep($"Preserved conflicting destination at: {preservedPath}");
     }
 
     private static void RemoveInstalledMod(InstalledMod mod, string modsPath)
@@ -225,9 +271,16 @@ public sealed class ModUpdateInstaller
         }
     }
 
-    private static void ValidateDownloadedArchive(string expectedModId, string downloadedArchivePath)
+    private static string? ValidateDownloadedArchive(
+        string expectedModId,
+        string? expectedVersion,
+        string downloadedArchivePath)
     {
-        if (!ModScanner.TryReadZipModIdentifier(downloadedArchivePath, out var archiveModId, out var validationError))
+        if (!ModScanner.TryReadZipModMetadata(
+                downloadedArchivePath,
+                out var archiveModId,
+                out var archiveVersion,
+                out var validationError))
         {
             throw new InvalidOperationException(
                 $"The downloaded mod archive is invalid: {validationError ?? "modinfo.json validation failed."}");
@@ -238,5 +291,19 @@ public sealed class ModUpdateInstaller
             throw new InvalidOperationException(
                 $"The downloaded archive targets '{archiveModId}', but '{expectedModId}' was requested.");
         }
+
+        if (string.IsNullOrWhiteSpace(archiveVersion))
+        {
+            throw new InvalidOperationException("The downloaded mod archive did not include a version in modinfo.json.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(expectedVersion)
+            && VersionComparer.Compare(archiveVersion, expectedVersion) != 0)
+        {
+            throw new InvalidOperationException(
+                $"The downloaded archive version '{archiveVersion}' does not match the expected update version '{expectedVersion}'.");
+        }
+
+        return archiveVersion;
     }
 }

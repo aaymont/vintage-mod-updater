@@ -190,23 +190,45 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public async Task UpdateModAsync(ModRowViewModel row, CancellationToken cancellationToken = default)
     {
-        if (_scanResult is null || row.UpdateStatus?.HasUpdate != true)
+        if (_scanResult is null)
         {
+            StatusMessage = "Scan installed mods before updating.";
             return;
         }
 
-        await RunBusyAsync($"Updating {row.Name}...", async () =>
+        if (row.UpdateStatus?.HasUpdate != true)
         {
-            await _updaterService.UpdateModAsync(
+            StatusMessage = $"{row.Name} does not have a downloadable compatible update.";
+            return;
+        }
+
+        ModUpdateInstallResult? result = null;
+        var succeeded = await RunBusyAsync($"Updating {row.Name}...", async () =>
+        {
+            result = await _updaterService.UpdateModAsync(
                 row.Mod,
                 row.UpdateStatus!,
                 _scanResult.Paths.ModsPath,
                 cancellationToken).ConfigureAwait(true);
-            StatusMessage = $"{row.Name} was updated. A backup was created first.";
         }).ConfigureAwait(true);
+
+        if (!succeeded || result is null)
+        {
+            if (succeeded)
+            {
+                StatusMessage = $"{row.Name} update finished without a result. Check the update log in .vintage-mod-updater/logs.";
+            }
+
+            return;
+        }
 
         await ScanAsync(cancellationToken).ConfigureAwait(true);
         await CheckUpdatesAsync(cancellationToken).ConfigureAwait(true);
+
+        var installedVersion = result.InstalledVersion ?? row.UpdateStatus!.AvailableVersion ?? "unknown";
+        StatusMessage =
+            $"{row.Name} updated to {installedVersion}. Installed as {Path.GetFileName(result.DestinationPath)}. "
+            + $"Backup saved. Log: {result.LogPath}";
     }
 
     public async Task UpdateAllAsync(CancellationToken cancellationToken = default)
@@ -229,7 +251,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         await ScanAsync(cancellationToken).ConfigureAwait(true);
     }
 
-    private async Task RunBusyAsync(string busyMessage, Func<Task> action)
+    private async Task<bool> RunBusyAsync(string busyMessage, Func<Task> action)
     {
         IsBusy = true;
         StatusMessage = busyMessage;
@@ -237,10 +259,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             await action().ConfigureAwait(true);
+            return true;
         }
         catch (Exception ex)
         {
-            StatusMessage = ex.Message;
+            var logHint = ex.Data["LogPath"] is string logPath && !string.IsNullOrWhiteSpace(logPath)
+                ? $" Details were written to {logPath}."
+                : string.Empty;
+            StatusMessage = $"{ex.Message}{logHint}";
+            return false;
         }
         finally
         {

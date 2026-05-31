@@ -60,6 +60,12 @@ public sealed record BackupEntry(
     bool IsDirectory,
     DateTimeOffset CreatedAt);
 
+public sealed record ModUpdateInstallResult(
+    BackupEntry Backup,
+    string DestinationPath,
+    string? InstalledVersion,
+    string LogPath);
+
 public sealed record ScanResult(
     VintageStoryPaths Paths,
     string? GameVersion,

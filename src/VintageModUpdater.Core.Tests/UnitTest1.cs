@@ -10,6 +10,95 @@ namespace VintageModUpdater.Core.Tests;
 public sealed class SecurityHardeningTests
 {
     [Fact]
+    public async Task InstallUpdateAsync_ReplacesZipModAndCreatesBackup()
+    {
+        using var temp = new TempDirectory();
+        var modsPath = Path.Combine(temp.Path, "Mods");
+        Directory.CreateDirectory(modsPath);
+
+        var installedPath = Path.Combine(modsPath, "examplemod.zip");
+        await File.WriteAllTextAsync(installedPath, "installed");
+
+        var installedMod = new InstalledMod(
+            Identifier: "examplemod",
+            Name: "Example Mod",
+            Version: "1.0.0",
+            Path: installedPath,
+            FileName: "examplemod.zip",
+            IsDirectory: false,
+            Authors: Array.Empty<string>(),
+            GameVersions: Array.Empty<string>(),
+            Error: null);
+
+        var update = new ModUpdateStatus(
+            ModId: "examplemod",
+            CurrentVersion: "1.0.0",
+            Kind: ModUpdateKind.UpdateAvailable,
+            AvailableVersion: "1.1.0",
+            DownloadFileName: "examplemod-1.1.0.zip",
+            DownloadUrl: "https://mods.vintagestory.at/files/examplemod-1.1.0.zip",
+            ErrorCode: null,
+            Message: "update available");
+
+        var payload = CreateZipWithMod("examplemod", "1.1.0");
+        var handler = new StaticResponseHandler(payload);
+        using var httpClient = new HttpClient(handler);
+        var installer = new ModUpdateInstaller(new BackupService(), httpClient);
+
+        var result = await installer.InstallUpdateAsync(installedMod, update, modsPath);
+
+        var destinationPath = Path.Combine(modsPath, "examplemod-1.1.0.zip");
+        Assert.True(File.Exists(destinationPath));
+        Assert.False(File.Exists(installedPath));
+        Assert.Equal("1.1.0", result.InstalledVersion);
+        Assert.Equal(destinationPath, result.DestinationPath);
+        Assert.True(File.Exists(result.LogPath));
+        Assert.True(Directory.Exists(BackupService.GetBackupRoot(modsPath)));
+    }
+
+    [Fact]
+    public async Task InstallUpdateAsync_RejectsArchiveWithUnexpectedVersion()
+    {
+        using var temp = new TempDirectory();
+        var modsPath = Path.Combine(temp.Path, "Mods");
+        Directory.CreateDirectory(modsPath);
+
+        var installedPath = Path.Combine(modsPath, "examplemod.zip");
+        await File.WriteAllTextAsync(installedPath, "installed");
+
+        var installedMod = new InstalledMod(
+            Identifier: "examplemod",
+            Name: "Example Mod",
+            Version: "1.0.0",
+            Path: installedPath,
+            FileName: "examplemod.zip",
+            IsDirectory: false,
+            Authors: Array.Empty<string>(),
+            GameVersions: Array.Empty<string>(),
+            Error: null);
+
+        var update = new ModUpdateStatus(
+            ModId: "examplemod",
+            CurrentVersion: "1.0.0",
+            Kind: ModUpdateKind.UpdateAvailable,
+            AvailableVersion: "1.1.0",
+            DownloadFileName: "examplemod-1.1.0.zip",
+            DownloadUrl: "https://mods.vintagestory.at/files/examplemod-1.1.0.zip",
+            ErrorCode: null,
+            Message: "update available");
+
+        var payload = CreateZipWithMod("examplemod", "1.0.0");
+        var handler = new StaticResponseHandler(payload);
+        using var httpClient = new HttpClient(handler);
+        var installer = new ModUpdateInstaller(new BackupService(), httpClient);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            installer.InstallUpdateAsync(installedMod, update, modsPath));
+        Assert.Contains("does not match the expected update version", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(installedPath));
+    }
+
+    [Fact]
     public async Task InstallUpdateAsync_RejectsArchiveWithMismatchedModId()
     {
         using var temp = new TempDirectory();
@@ -223,18 +312,23 @@ public sealed class SecurityHardeningTests
             ErrorCode: null,
             Message: "update available");
 
-        var installer = new ModUpdateInstaller(new BackupService(), new HttpClient(new StaticResponseHandler(CreateZipWithModId("examplemod"))));
+        var installer = new ModUpdateInstaller(new BackupService(), new HttpClient(new StaticResponseHandler(CreateZipWithMod("examplemod", "1.1.0"))));
         await Assert.ThrowsAsync<InvalidOperationException>(() => installer.InstallUpdateAsync(installedMod, update, modsPath));
     }
 
     private static byte[] CreateZipWithModId(string modId)
+    {
+        return CreateZipWithMod(modId, "1.1.0");
+    }
+
+    private static byte[] CreateZipWithMod(string modId, string version)
     {
         using var memory = new MemoryStream();
         using (var archive = new ZipArchive(memory, ZipArchiveMode.Create, leaveOpen: true))
         {
             var entry = archive.CreateEntry("modinfo.json");
             using var writer = new StreamWriter(entry.Open(), Encoding.UTF8, leaveOpen: false);
-            writer.Write($"{{\"modid\":\"{modId}\",\"name\":\"{modId}\",\"version\":\"1.1.0\"}}");
+            writer.Write($"{{\"modid\":\"{modId}\",\"name\":\"{modId}\",\"version\":\"{version}\"}}");
         }
 
         return memory.ToArray();
