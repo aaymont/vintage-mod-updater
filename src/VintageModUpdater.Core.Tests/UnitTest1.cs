@@ -412,6 +412,25 @@ public sealed class SecurityHardeningTests
     }
 
     [Fact]
+    public async Task ScanAsync_CreatesWorkspacePlaceholderModInfoInModsFolder()
+    {
+        using var temp = new TempDirectory();
+        var modsPath = Path.Combine(temp.Path, "Mods");
+        Directory.CreateDirectory(modsPath);
+
+        var service = new VintageModUpdaterService();
+        var settings = new UpdaterSettings
+        {
+            ModsPath = modsPath
+        };
+
+        await service.ScanAsync(settings);
+
+        var modInfoPath = Path.Combine(modsPath, ".vintage-mod-updater", "modinfo.json");
+        Assert.True(File.Exists(modInfoPath));
+    }
+
+    [Fact]
     public async Task InstallUpdateAsync_RejectsNonHttpsDownloadUrl()
     {
         using var temp = new TempDirectory();

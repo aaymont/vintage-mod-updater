@@ -46,6 +46,7 @@ public sealed class VintageModUpdaterService
         var modsPath = !string.IsNullOrWhiteSpace(settings.ModsPath)
             ? settings.ModsPath
             : paths.ModsPath;
+        EnsureUpdaterWorkspaceForScan(modsPath);
         var mods = _modScanner.Scan(modsPath);
         var backups = await _backupService.ListBackupsAsync(modsPath, cancellationToken).ConfigureAwait(false);
 
@@ -58,6 +59,18 @@ public sealed class VintageModUpdaterService
             gameVersion,
             mods,
             backups);
+    }
+
+    private static void EnsureUpdaterWorkspaceForScan(string modsPath)
+    {
+        try
+        {
+            UpdaterWorkspace.EnsureWorkspace(modsPath);
+        }
+        catch
+        {
+            // Workspace setup during scan is best-effort; scanning should continue.
+        }
     }
 
     public Task<IReadOnlyDictionary<string, ModUpdateStatus>> CheckUpdatesAsync(
