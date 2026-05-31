@@ -17,6 +17,8 @@ The app is built for Windows, Linux, and macOS.
 
 When releases are available, download the latest version from the project's GitHub Releases page:
 
+[https://github.com/aaymont/vintage-mod-updater/releases](https://github.com/aaymont/vintage-mod-updater/releases)
+
 1. Open the GitHub repository.
 2. Select **Releases**.
 3. Download the file for your operating system:
@@ -63,7 +65,7 @@ You need the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 Clone the repository:
 
 ```powershell
-git clone <repository-url>
+git clone https://github.com/aaymont/vintage-mod-updater.git
 cd vintage-mod-updater
 ```
 
@@ -121,30 +123,9 @@ chmod +x VintageModUpdater.App
 
 macOS may warn that the app is from an unidentified developer until the project has signed and notarized builds.
 
-## Release Builds
+## Security
 
-This repository includes a GitHub Actions workflow at `.github/workflows/release.yml`.
-
-To publish a release:
-
-1. Update the app version if needed.
-2. Commit your changes.
-3. Create and push a version tag:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-GitHub Actions will:
-
-- Restore and build the app.
-- Publish self-contained builds for Windows, Linux, macOS Intel, and macOS Apple Silicon.
-- Package the builds as downloadable archives.
-- Create a GitHub Release.
-- Generate release notes and a changelog from GitHub history.
-
-Tags that include a prerelease suffix, such as `v0.2.0-beta.1`, are marked as prereleases.
+Security controls, known limitations, and vulnerability reporting guidance are documented in [`Security.md`](Security.md).
 
 ## Project Notes
 

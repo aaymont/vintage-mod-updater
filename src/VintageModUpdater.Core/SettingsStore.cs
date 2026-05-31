@@ -4,6 +4,7 @@ namespace VintageModUpdater.Core;
 
 public sealed class SettingsStore
 {
+    private const int MaxSettingsBytes = 64 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
@@ -28,6 +29,12 @@ public sealed class SettingsStore
 
         try
         {
+            var info = new FileInfo(SettingsPath);
+            if (info.Exists && info.Length > MaxSettingsBytes)
+            {
+                return new UpdaterSettings();
+            }
+
             await using var stream = File.OpenRead(SettingsPath);
             return await JsonSerializer.DeserializeAsync<UpdaterSettings>(
                 stream,

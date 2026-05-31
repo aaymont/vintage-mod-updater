@@ -1,4 +1,4 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -7,6 +7,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VintageModUpdater.App", "src\VintageModUpdater.App\VintageModUpdater.App.csproj", "{4D427C99-1BFC-A762-E624-D7C0DA16CA0B}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VintageModUpdater.Core", "src\VintageModUpdater.Core\VintageModUpdater.Core.csproj", "{A9A7B676-90E8-B68B-F86A-A467687A08ED}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VintageModUpdater.Core.Tests", "src\VintageModUpdater.Core.Tests\VintageModUpdater.Core.Tests.csproj", "{BFC231A0-8CBE-4846-8F4A-DEB3D527C7A9}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -22,6 +24,10 @@ Global
 		{A9A7B676-90E8-B68B-F86A-A467687A08ED}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A9A7B676-90E8-B68B-F86A-A467687A08ED}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A9A7B676-90E8-B68B-F86A-A467687A08ED}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BFC231A0-8CBE-4846-8F4A-DEB3D527C7A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BFC231A0-8CBE-4846-8F4A-DEB3D527C7A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BFC231A0-8CBE-4846-8F4A-DEB3D527C7A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BFC231A0-8CBE-4846-8F4A-DEB3D527C7A9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -29,6 +35,7 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{4D427C99-1BFC-A762-E624-D7C0DA16CA0B} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{A9A7B676-90E8-B68B-F86A-A467687A08ED} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{BFC231A0-8CBE-4846-8F4A-DEB3D527C7A9} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {E57B0F98-7DF1-48F9-B41E-BF83A33A561A}

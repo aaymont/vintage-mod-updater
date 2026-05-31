@@ -11,7 +11,8 @@ public sealed class BackupService
 
     public async Task<IReadOnlyList<BackupEntry>> ListBackupsAsync(string modsPath, CancellationToken cancellationToken = default)
     {
-        var root = GetBackupRoot(modsPath);
+        var safeModsPath = PathGuard.NormalizePath(modsPath);
+        var root = GetBackupRoot(safeModsPath);
         if (!Directory.Exists(root))
         {
             return Array.Empty<BackupEntry>();
@@ -24,6 +25,10 @@ public sealed class BackupService
 
             try
             {
+                PathGuard.EnsureNoReparsePointsUnderRoot(
+                    root,
+                    manifestPath,
+                    "Refusing to read backup metadata through a symbolic link or junction path.");
                 await using var stream = File.OpenRead(manifestPath);
                 var manifest = await JsonSerializer.DeserializeAsync<BackupManifest>(
                     stream,
@@ -32,7 +37,11 @@ public sealed class BackupService
 
                 if (manifest is not null)
                 {
-                    backups.Add(manifest.ToEntry());
+                    var entry = manifest.ToEntry();
+                    if (IsValidBackupEntry(entry, safeModsPath, manifestPath))
+                    {
+                        backups.Add(entry);
+                    }
                 }
             }
             catch
@@ -51,19 +60,48 @@ public sealed class BackupService
         string modsPath,
         CancellationToken cancellationToken = default)
     {
+        PathGuard.EnsureSafeModsPathForWrite(modsPath);
+        var safeModsPath = PathGuard.NormalizePath(modsPath);
+        PathGuard.EnsureContained(
+            safeModsPath,
+            mod.Path,
+            "The selected mod path is outside the configured Mods directory.");
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            safeModsPath,
+            mod.Path,
+            "Refusing to back up mods through a symbolic link or junction path.");
+
         if (!File.Exists(mod.Path) && !Directory.Exists(mod.Path))
         {
             throw new FileNotFoundException("The installed mod could not be found for backup.", mod.Path);
         }
 
         var id = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}_{Sanitize(mod.Identifier)}_{Sanitize(mod.Version ?? "unknown")}";
-        var backupDirectory = Path.Combine(GetBackupRoot(modsPath), id);
+        var backupRoot = GetBackupRoot(safeModsPath);
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            safeModsPath,
+            backupRoot,
+            "Refusing to back up mods through a symbolic link or junction path.");
+        var backupDirectory = Path.Combine(backupRoot, id);
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            safeModsPath,
+            backupDirectory,
+            "Refusing to back up mods through a symbolic link or junction path.");
         Directory.CreateDirectory(backupDirectory);
 
         var backupPath = Path.Combine(backupDirectory, mod.FileName);
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            safeModsPath,
+            backupPath,
+            "Refusing to back up mods through a symbolic link or junction path.");
         if (mod.IsDirectory)
         {
-            CopyDirectory(mod.Path, backupPath, overwrite: true);
+            CopyDirectory(
+                mod.Path,
+                backupPath,
+                overwrite: true,
+                sourceRootPath: safeModsPath,
+                targetRootPath: backupRoot);
         }
         else
         {
@@ -75,33 +113,109 @@ public sealed class BackupService
             mod.Identifier,
             mod.Name,
             mod.Version,
-            mod.Path,
+            PathGuard.NormalizePath(mod.Path),
             backupPath,
             mod.IsDirectory,
             DateTimeOffset.UtcNow);
 
         var manifest = BackupManifest.FromEntry(entry);
-        await using var manifestStream = File.Create(Path.Combine(backupDirectory, "backup.json"));
+        var manifestPath = Path.Combine(backupDirectory, "backup.json");
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            safeModsPath,
+            manifestPath,
+            "Refusing to write backup metadata through a symbolic link or junction path.");
+        await using var manifestStream = File.Create(manifestPath);
         await JsonSerializer.SerializeAsync(manifestStream, manifest, JsonOptions, cancellationToken).ConfigureAwait(false);
 
         return entry;
     }
 
-    public Task RestoreAsync(BackupEntry backup, CancellationToken cancellationToken = default)
+    public async Task RestoreAsync(BackupEntry backup, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!File.Exists(backup.BackupPath) && !Directory.Exists(backup.BackupPath))
+        var safeBackupPath = PathGuard.NormalizePath(backup.BackupPath);
+        var backupRootSegment = $"{Path.DirectorySeparatorChar}.vintage-mod-updater{Path.DirectorySeparatorChar}backups{Path.DirectorySeparatorChar}";
+        var markerIndex = safeBackupPath.IndexOf(backupRootSegment, PathComparison);
+        if (markerIndex < 0)
         {
-            throw new FileNotFoundException("The backup payload could not be found.", backup.BackupPath);
+            throw new InvalidOperationException("The backup path is not inside a valid updater backup directory.");
         }
 
-        var modsPath = Path.GetDirectoryName(backup.OriginalPath)
-            ?? throw new InvalidOperationException("The original mod path is invalid.");
+        var modsPath = safeBackupPath[..markerIndex];
+        var manifestPath = Path.Combine(
+            Path.GetDirectoryName(safeBackupPath)
+                ?? throw new InvalidOperationException("The backup path is not inside a valid updater backup directory."),
+            "backup.json");
+        if (!File.Exists(manifestPath))
+        {
+            throw new FileNotFoundException("The backup manifest could not be found.", manifestPath);
+        }
+
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            GetBackupRoot(modsPath),
+            manifestPath,
+            "Refusing to read backup metadata through a symbolic link or junction path.");
+        await using var manifestStream = File.OpenRead(manifestPath);
+        var manifest = await JsonSerializer.DeserializeAsync<BackupManifest>(
+            manifestStream,
+            JsonOptions,
+            cancellationToken).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            throw new InvalidOperationException("The backup manifest is invalid.");
+        }
+
+        var restoredEntry = manifest.ToEntry();
+        if (!restoredEntry.Id.Equals(backup.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("The selected backup metadata changed. Please rescan backups and try again.");
+        }
+
+        if (!string.Equals(restoredEntry.ModId, backup.ModId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(restoredEntry.ModName, backup.ModName, StringComparison.Ordinal)
+            || !string.Equals(restoredEntry.Version, backup.Version, StringComparison.Ordinal)
+            || !string.Equals(PathGuard.NormalizePath(restoredEntry.OriginalPath), PathGuard.NormalizePath(backup.OriginalPath), PathComparison)
+            || !string.Equals(PathGuard.NormalizePath(restoredEntry.BackupPath), PathGuard.NormalizePath(backup.BackupPath), PathComparison)
+            || restoredEntry.IsDirectory != backup.IsDirectory
+            || restoredEntry.CreatedAt != backup.CreatedAt)
+        {
+            throw new InvalidOperationException("The selected backup metadata changed. Please rescan backups and try again.");
+        }
+
+        if (!IsValidBackupEntry(restoredEntry, modsPath, manifestPath))
+        {
+            throw new InvalidOperationException("The backup manifest contains invalid or unsafe paths.");
+        }
+
+        safeBackupPath = PathGuard.NormalizePath(restoredEntry.BackupPath);
+        var safeOriginalPath = PathGuard.NormalizePath(restoredEntry.OriginalPath);
+        if (!File.Exists(safeBackupPath) && !Directory.Exists(safeBackupPath))
+        {
+            throw new FileNotFoundException("The backup payload could not be found.", safeBackupPath);
+        }
+
+        PathGuard.EnsureSafeModsPathForWrite(modsPath);
+        PathGuard.EnsureContained(
+            modsPath,
+            safeOriginalPath,
+            "The backup restore target is outside the configured Mods directory.");
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            modsPath,
+            safeOriginalPath,
+            "Refusing to restore mods through a symbolic link or junction path.");
+        PathGuard.EnsureContained(
+            GetBackupRoot(modsPath),
+            safeBackupPath,
+            "The backup payload is outside the configured backup directory.");
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            GetBackupRoot(modsPath),
+            safeBackupPath,
+            "Refusing to restore from a symbolic link or junction path.");
 
         var matchingInstalledMods = new ModScanner()
             .Scan(modsPath)
-            .Where(mod => mod.Identifier.Equals(backup.ModId, StringComparison.OrdinalIgnoreCase))
+            .Where(mod => mod.Identifier.Equals(restoredEntry.ModId, StringComparison.OrdinalIgnoreCase))
             .Select(mod => mod.Path)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -111,18 +225,29 @@ public sealed class BackupService
             PreservePath(path, modsPath);
         }
 
-        PreservePath(backup.OriginalPath, modsPath);
+        PreservePath(safeOriginalPath, modsPath);
 
-        if (backup.IsDirectory)
+        if (restoredEntry.IsDirectory)
         {
-            CopyDirectory(backup.BackupPath, backup.OriginalPath, overwrite: true);
+            CopyDirectory(
+                safeBackupPath,
+                safeOriginalPath,
+                overwrite: true,
+                sourceRootPath: GetBackupRoot(modsPath),
+                targetRootPath: modsPath);
         }
         else
         {
-            File.Copy(backup.BackupPath, backup.OriginalPath, overwrite: true);
+            PathGuard.EnsureNoReparsePointsUnderRoot(
+                GetBackupRoot(modsPath),
+                safeBackupPath,
+                "Refusing to restore from a symbolic link or junction path.");
+            PathGuard.EnsureNoReparsePointsUnderRoot(
+                modsPath,
+                safeOriginalPath,
+                "Refusing to restore mods through a symbolic link or junction path.");
+            File.Copy(safeBackupPath, safeOriginalPath, overwrite: true);
         }
-
-        return Task.CompletedTask;
     }
 
     public static string GetBackupRoot(string modsPath)
@@ -147,24 +272,64 @@ public sealed class BackupService
         await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
     }
 
-    internal static void CopyDirectory(string sourceDirectory, string targetDirectory, bool overwrite)
+    internal static void CopyDirectory(
+        string sourceDirectory,
+        string targetDirectory,
+        bool overwrite,
+        string sourceRootPath,
+        string targetRootPath)
     {
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            sourceRootPath,
+            sourceDirectory,
+            "Refusing to copy from a symbolic link or junction path.");
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            targetRootPath,
+            targetDirectory,
+            "Refusing to copy into a symbolic link or junction path.");
         Directory.CreateDirectory(targetDirectory);
 
         foreach (var file in Directory.EnumerateFiles(sourceDirectory))
         {
             var targetFile = Path.Combine(targetDirectory, Path.GetFileName(file));
+            PathGuard.EnsureNoReparsePointsUnderRoot(
+                sourceRootPath,
+                file,
+                "Refusing to copy from a symbolic link or junction path.");
+            PathGuard.EnsureNoReparsePointsUnderRoot(
+                targetRootPath,
+                targetFile,
+                "Refusing to copy into a symbolic link or junction path.");
             File.Copy(file, targetFile, overwrite);
         }
 
         foreach (var directory in Directory.EnumerateDirectories(sourceDirectory))
         {
-            CopyDirectory(directory, Path.Combine(targetDirectory, Path.GetFileName(directory)), overwrite);
+            var targetSubDirectory = Path.Combine(targetDirectory, Path.GetFileName(directory));
+            PathGuard.EnsureNoReparsePointsUnderRoot(
+                sourceRootPath,
+                directory,
+                "Refusing to copy from a symbolic link or junction path.");
+            PathGuard.EnsureNoReparsePointsUnderRoot(
+                targetRootPath,
+                targetSubDirectory,
+                "Refusing to copy into a symbolic link or junction path.");
+            CopyDirectory(
+                directory,
+                targetSubDirectory,
+                overwrite,
+                sourceRootPath,
+                targetRootPath);
         }
     }
 
     private static void PreservePath(string path, string modsPath)
     {
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            modsPath,
+            path,
+            "Refusing to preserve files through a symbolic link or junction path.");
+
         if (!File.Exists(path) && !Directory.Exists(path))
         {
             return;
@@ -175,9 +340,17 @@ public sealed class BackupService
             ".vintage-mod-updater",
             "replaced-on-restore",
             DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss"));
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            modsPath,
+            preserveDirectory,
+            "Refusing to preserve files through a symbolic link or junction path.");
         Directory.CreateDirectory(preserveDirectory);
 
         var targetPath = Path.Combine(preserveDirectory, Path.GetFileName(path));
+        PathGuard.EnsureNoReparsePointsUnderRoot(
+            modsPath,
+            targetPath,
+            "Refusing to preserve files through a symbolic link or junction path.");
         if (Directory.Exists(path))
         {
             Directory.Move(path, targetPath);
@@ -194,6 +367,37 @@ public sealed class BackupService
         var sanitized = new string(value.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
         return string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized;
     }
+
+    private static bool IsValidBackupEntry(BackupEntry backup, string modsPath, string manifestPath)
+    {
+        try
+        {
+            var safeModsPath = PathGuard.NormalizePath(modsPath);
+            var safeManifestPath = PathGuard.NormalizePath(manifestPath);
+            var backupRoot = GetBackupRoot(safeModsPath);
+            var safeOriginalPath = PathGuard.NormalizePath(backup.OriginalPath);
+            var safeBackupPath = PathGuard.NormalizePath(backup.BackupPath);
+
+            if (!PathGuard.IsPathContained(backupRoot, safeManifestPath))
+            {
+                return false;
+            }
+
+            if (!PathGuard.IsPathContained(safeModsPath, safeOriginalPath))
+            {
+                return false;
+            }
+
+            return PathGuard.IsPathContained(backupRoot, safeBackupPath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private sealed class BackupManifest
     {

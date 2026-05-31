@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  DOTNET_VERSION: "8.0.x"
+  DOTNET_VERSION: "8.0.421"
   PROJECT_PATH: "src/VintageModUpdater.App/VintageModUpdater.App.csproj"
   SOLUTION_PATH: "vintage-mod-updater.sln"
 
@@ -49,10 +49,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -61,6 +61,9 @@ jobs:
 
       - name: Build
         run: dotnet build $env:SOLUTION_PATH -c Release --no-restore
+
+      - name: Test
+        run: dotnet test $env:SOLUTION_PATH -c Release --no-build
 
       - name: Publish
         run: >
@@ -86,7 +89,7 @@ jobs:
         run: tar -czf "artifacts/${{ matrix.artifact_name }}.tar.gz" -C "artifacts/publish/${{ matrix.artifact_name }}" .
 
       - name: Upload build archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact_name }}
           path: artifacts/${{ matrix.artifact_name }}.*
@@ -100,13 +103,13 @@ jobs:
 
     steps:
       - name: Download build archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
           merge-multiple: true
 
       - name: Create release with generated changelog
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release-assets/*
           generate_release_notes: true

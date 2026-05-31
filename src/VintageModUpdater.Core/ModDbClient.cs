@@ -6,11 +6,19 @@ namespace VintageModUpdater.Core;
 public sealed class ModDbClient
 {
     private static readonly Uri BaseUri = new("https://mods.vintagestory.at");
+    private static readonly string OfficialModDbHost = "mods.vintagestory.at";
+    private const int MaxApiResponseBytes = 2 * 1024 * 1024;
+    private static readonly TimeSpan ModDbRequestTimeout = TimeSpan.FromSeconds(60);
     private readonly HttpClient _httpClient;
 
     public ModDbClient(HttpClient? httpClient = null)
     {
         _httpClient = httpClient ?? new HttpClient();
+        if (_httpClient.Timeout == Timeout.InfiniteTimeSpan || _httpClient.Timeout > ModDbRequestTimeout)
+        {
+            _httpClient.Timeout = ModDbRequestTimeout;
+        }
+
         _httpClient.BaseAddress ??= BaseUri;
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("VintageModUpdater/0.1");
     }
@@ -119,8 +127,23 @@ public sealed class ModDbClient
         var requestUri = "/api/v2/mods/install-information"
             + $"?ids={WebUtility.UrlEncode(ids)}&gv={WebUtility.UrlEncode(gameVersion)}";
 
-        using var response = await _httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        using var response = await _httpClient
+            .GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        var finalUri = response.RequestMessage?.RequestUri;
+        if (finalUri is null
+            || !finalUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !finalUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new HttpRequestException("ModDB response originated from an unexpected host.");
+        }
+
+        if (response.Content.Headers.ContentLength is long contentLength && contentLength > MaxApiResponseBytes)
+        {
+            throw new HttpRequestException("ModDB returned an unexpectedly large response body.");
+        }
+
+        var body = await ReadResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -216,9 +239,17 @@ public sealed class ModDbClient
             return null;
         }
 
-        return Uri.TryCreate(fileUrl, UriKind.Absolute, out var absoluteUri)
-            ? absoluteUri.ToString()
-            : new Uri(BaseUri, fileUrl).ToString();
+        var resolvedUri = Uri.TryCreate(fileUrl, UriKind.Absolute, out var absoluteUri)
+            ? absoluteUri
+            : new Uri(BaseUri, fileUrl);
+
+        if (!resolvedUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !resolvedUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return resolvedUri.ToString();
     }
 
     private static string ErrorMessage(int errorCode)
@@ -233,6 +264,33 @@ public sealed class ModDbClient
             4102 => "This release was force-retracted on ModDB.",
             _ => $"ModDB returned error code {errorCode}."
         };
+    }
+
+    private static async Task<string> ReadResponseBodyAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var target = new MemoryStream();
+        var buffer = new byte[81920];
+        var totalBytes = 0;
+
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalBytes += read;
+            if (totalBytes > MaxApiResponseBytes)
+            {
+                throw new HttpRequestException("ModDB response exceeded the supported size limit.");
+            }
+
+            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(target.ToArray());
     }
 
     private sealed record InstallInformation(
