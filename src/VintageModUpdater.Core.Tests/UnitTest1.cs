@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using VintageModUpdater.Core;
 
 namespace VintageModUpdater.Core.Tests;
@@ -96,6 +97,54 @@ public sealed class SecurityHardeningTests
         Assert.Equal(destinationPath, result.DestinationPath);
         Assert.True(File.Exists(result.LogPath));
         Assert.True(Directory.Exists(BackupService.GetBackupRoot(modsPath)));
+    }
+
+    [Fact]
+    public async Task InstallUpdateAsync_CreatesWorkspacePlaceholderModInfo()
+    {
+        using var temp = new TempDirectory();
+        var modsPath = Path.Combine(temp.Path, "Mods");
+        Directory.CreateDirectory(modsPath);
+
+        var installedPath = Path.Combine(modsPath, "examplemod.zip");
+        await File.WriteAllTextAsync(installedPath, "installed");
+
+        var installedMod = new InstalledMod(
+            Identifier: "examplemod",
+            Name: "Example Mod",
+            Version: "1.0.0",
+            Path: installedPath,
+            FileName: "examplemod.zip",
+            IsDirectory: false,
+            Authors: Array.Empty<string>(),
+            GameVersions: Array.Empty<string>(),
+            Error: null);
+
+        var update = new ModUpdateStatus(
+            ModId: "examplemod",
+            CurrentVersion: "1.0.0",
+            Kind: ModUpdateKind.UpdateAvailable,
+            AvailableVersion: "1.1.0",
+            DownloadFileName: "examplemod-1.1.0.zip",
+            DownloadUrl: "https://mods.vintagestory.at/files/examplemod-1.1.0.zip",
+            ErrorCode: null,
+            Message: "update available");
+
+        var payload = CreateZipWithMod("examplemod", "1.1.0");
+        var handler = new StaticResponseHandler(payload);
+        using var httpClient = new HttpClient(handler);
+        var installer = new ModUpdateInstaller(new BackupService(), httpClient);
+
+        await installer.InstallUpdateAsync(installedMod, update, modsPath);
+
+        var modInfoPath = Path.Combine(modsPath, ".vintage-mod-updater", "modinfo.json");
+        Assert.True(File.Exists(modInfoPath));
+
+        var modInfoJson = await File.ReadAllTextAsync(modInfoPath);
+        using var document = JsonDocument.Parse(modInfoJson);
+        Assert.Equal(
+            "vintage_mod_updater_workspace",
+            document.RootElement.GetProperty("modid").GetString());
     }
 
     [Fact]
@@ -323,6 +372,43 @@ public sealed class SecurityHardeningTests
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.CheckUpdatesAsync(new[] { mod }, "1.20.0"));
+    }
+
+    [Fact]
+    public async Task CheckUpdaterAppUpdateAsync_ReturnsUpdateAvailableWhenNewerReleaseExists()
+    {
+        var body = """
+        {
+          "mod": {
+            "releases": [
+              { "modversion": "0.3.2" },
+              { "modversion": "0.3.1" }
+            ]
+          },
+          "statuscode": "200"
+        }
+        """;
+
+        var handler = new DynamicResponseHandler(_ =>
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://mods.vintagestory.at/api/mod/9231"),
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mods.vintagestory.at")
+        };
+        var client = new ModDbClient(httpClient);
+
+        var status = await client.CheckUpdaterAppUpdateAsync("0.3.1");
+
+        Assert.True(status.UpdateAvailable);
+        Assert.Equal("0.3.2", status.LatestVersion);
+        Assert.Equal("https://mods.vintagestory.at/vsmu", status.ModPageUrl);
     }
 
     [Fact]

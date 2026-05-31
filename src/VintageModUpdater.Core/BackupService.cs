@@ -77,6 +77,7 @@ public sealed class BackupService
         }
 
         var id = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}_{Sanitize(mod.Identifier)}_{Sanitize(mod.Version ?? "unknown")}";
+        UpdaterWorkspace.EnsureWorkspace(safeModsPath);
         var backupRoot = GetBackupRoot(safeModsPath);
         PathGuard.EnsureNoReparsePointsUnderRoot(
             safeModsPath,
@@ -336,8 +337,7 @@ public sealed class BackupService
         }
 
         var preserveDirectory = Path.Combine(
-            modsPath,
-            ".vintage-mod-updater",
+            UpdaterWorkspace.EnsureWorkspace(modsPath),
             "replaced-on-restore",
             DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss"));
         PathGuard.EnsureNoReparsePointsUnderRoot(

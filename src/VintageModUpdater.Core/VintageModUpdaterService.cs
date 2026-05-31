@@ -67,6 +67,13 @@ public sealed class VintageModUpdaterService
         return _modDbClient.CheckUpdatesAsync(scanResult.Mods, scanResult.GameVersion, cancellationToken);
     }
 
+    public Task<AppUpdateStatus> CheckAppUpdateAsync(
+        string currentVersion,
+        CancellationToken cancellationToken = default)
+    {
+        return _modDbClient.CheckUpdaterAppUpdateAsync(currentVersion, cancellationToken);
+    }
+
     public Task<ModUpdateInstallResult> UpdateModAsync(
         InstalledMod mod,
         ModUpdateStatus update,

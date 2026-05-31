@@ -6,6 +6,8 @@ namespace VintageModUpdater.Core;
 public sealed class ModDbClient
 {
     private static readonly Uri BaseUri = new("https://mods.vintagestory.at");
+    private const int UpdaterModNumericId = 9231;
+    private const string UpdaterModPageUrl = "https://mods.vintagestory.at/vsmu";
     private const int MaxApiResponseBytes = 2 * 1024 * 1024;
     private static readonly TimeSpan ModDbRequestTimeout = TimeSpan.FromSeconds(60);
     private readonly HttpClient _httpClient;
@@ -115,6 +117,57 @@ public sealed class ModDbClient
         }
 
         return statuses;
+    }
+
+    public async Task<AppUpdateStatus> CheckUpdaterAppUpdateAsync(
+        string currentVersion,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedCurrentVersion = NormalizeVersion(currentVersion) ?? "0.0.0";
+        using var response = await _httpClient
+            .GetAsync($"/api/mod/{UpdaterModNumericId}", HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        var finalUri = response.RequestMessage?.RequestUri;
+        if (finalUri is null || !ModDbTrustPolicy.IsTrustedApiHost(finalUri))
+        {
+            throw new HttpRequestException("ModDB response originated from an unexpected host.");
+        }
+
+        if (response.Content.Headers.ContentLength is long contentLength && contentLength > MaxApiResponseBytes)
+        {
+            throw new HttpRequestException("ModDB returned an unexpectedly large response body.");
+        }
+
+        var body = await ReadResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"ModDB returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}",
+                null,
+                response.StatusCode);
+        }
+
+        using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        });
+
+        if (!document.RootElement.TryGetProperty("mod", out var modElement)
+            || modElement.ValueKind != JsonValueKind.Object)
+        {
+            return new AppUpdateStatus(normalizedCurrentVersion, null, UpdateAvailable: false, UpdaterModPageUrl);
+        }
+
+        var latestVersion = ReadLatestReleaseVersion(modElement);
+        var updateAvailable = !string.IsNullOrWhiteSpace(latestVersion)
+            && VersionComparer.IsNewer(latestVersion, normalizedCurrentVersion);
+
+        return new AppUpdateStatus(
+            normalizedCurrentVersion,
+            latestVersion,
+            updateAvailable,
+            UpdaterModPageUrl);
     }
 
     private async Task<IReadOnlyDictionary<string, InstallInformation>> RequestInstallInformationAsync(
@@ -287,6 +340,78 @@ public sealed class ModDbClient
         }
 
         return System.Text.Encoding.UTF8.GetString(target.ToArray());
+    }
+
+    private static string? ReadLatestReleaseVersion(JsonElement modElement)
+    {
+        if (!TryGetProperty(modElement, "releases", out var releasesElement)
+            || releasesElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        string? latest = null;
+        foreach (var release in releasesElement.EnumerateArray())
+        {
+            var version = ReadString(release, "modversion", "version");
+            version = NormalizeVersion(version);
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                continue;
+            }
+
+            if (latest is null || VersionComparer.IsNewer(version, latest))
+            {
+                latest = version;
+            }
+        }
+
+        return latest;
+    }
+
+    private static string? NormalizeVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return null;
+        }
+
+        var trimmed = version.Trim();
+        var separatorIndex = trimmed.IndexOfAny(new[] { '+', '-', ' ' });
+        if (separatorIndex > 0)
+        {
+            trimmed = trimmed[..separatorIndex];
+        }
+
+        return Version.TryParse(trimmed, out _) ? trimmed : null;
+    }
+
+    private static string? ReadString(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (TryGetProperty(element, name, out var property) && property.ValueKind == JsonValueKind.String)
+            {
+                return property.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private sealed record InstallInformation(

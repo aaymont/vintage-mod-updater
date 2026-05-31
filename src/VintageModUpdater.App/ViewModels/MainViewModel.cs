@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Reflection;
 using VintageModUpdater.Core;
 
 namespace VintageModUpdater.App.ViewModels;
@@ -13,6 +14,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _isBusy;
     private string _statusMessage = "Ready";
     private string? _gameVersion;
+    private bool _isAppUpdateAvailable;
+    private string _appUpdateBannerText = "";
+    private string _officialAppModPageUrl = "https://mods.vintagestory.at/vsmu";
 
     public MainViewModel()
         : this(new SettingsStore(), new VintageModUpdaterService())
@@ -120,12 +124,58 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool IsAppUpdateAvailable
+    {
+        get => _isAppUpdateAvailable;
+        private set
+        {
+            if (_isAppUpdateAvailable == value)
+            {
+                return;
+            }
+
+            _isAppUpdateAvailable = value;
+            OnPropertyChanged(nameof(IsAppUpdateAvailable));
+        }
+    }
+
+    public string AppUpdateBannerText
+    {
+        get => _appUpdateBannerText;
+        private set
+        {
+            if (_appUpdateBannerText == value)
+            {
+                return;
+            }
+
+            _appUpdateBannerText = value;
+            OnPropertyChanged(nameof(AppUpdateBannerText));
+        }
+    }
+
+    public string OfficialAppModPageUrl
+    {
+        get => _officialAppModPageUrl;
+        private set
+        {
+            if (_officialAppModPageUrl == value)
+            {
+                return;
+            }
+
+            _officialAppModPageUrl = value;
+            OnPropertyChanged(nameof(OfficialAppModPageUrl));
+        }
+    }
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         _settings = await _settingsStore.LoadAsync(cancellationToken).ConfigureAwait(true);
         OnPropertyChanged(nameof(InstallPath));
         OnPropertyChanged(nameof(ModsPath));
         await ScanAsync(cancellationToken).ConfigureAwait(true);
+        await RefreshAppUpdateStatusAsync(cancellationToken).ConfigureAwait(true);
     }
 
     public async Task SaveAndScanAsync(CancellationToken cancellationToken = default)
@@ -186,6 +236,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 : $"{updates} compatible update(s) found.";
             OnPropertyChanged(nameof(Summary));
         }).ConfigureAwait(true);
+
+        await RefreshAppUpdateStatusAsync(cancellationToken).ConfigureAwait(true);
     }
 
     public async Task UpdateModAsync(ModRowViewModel row, CancellationToken cancellationToken = default)
@@ -278,6 +330,48 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private static string? NormalizeInput(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private async Task RefreshAppUpdateStatusAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var currentVersion = ReadCurrentAppVersion();
+            var appUpdate = await _updaterService.CheckAppUpdateAsync(currentVersion, cancellationToken).ConfigureAwait(true);
+            OfficialAppModPageUrl = appUpdate.ModPageUrl;
+
+            if (appUpdate.UpdateAvailable && !string.IsNullOrWhiteSpace(appUpdate.LatestVersion))
+            {
+                IsAppUpdateAvailable = true;
+                AppUpdateBannerText =
+                    $"A new Vintage Mod Updater release ({appUpdate.LatestVersion}) is available. "
+                    + $"You are running {appUpdate.CurrentVersion}.";
+                return;
+            }
+        }
+        catch
+        {
+            // Keep update checks non-blocking. Failures should not disrupt mod management.
+        }
+
+        IsAppUpdateAvailable = false;
+        AppUpdateBannerText = "";
+    }
+
+    private static string ReadCurrentAppVersion()
+    {
+        var assembly = Assembly.GetEntryAssembly() ?? typeof(MainViewModel).Assembly;
+        var informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        var rawVersion = NormalizeInput(informationalVersion) ?? assembly.GetName().Version?.ToString() ?? "0.0.0";
+        var separatorIndex = rawVersion.IndexOfAny(new[] { '+', '-', ' ' });
+        if (separatorIndex > 0)
+        {
+            rawVersion = rawVersion[..separatorIndex];
+        }
+
+        return Version.TryParse(rawVersion, out _) ? rawVersion : "0.0.0";
     }
 
     private void OnPropertyChanged(string propertyName)

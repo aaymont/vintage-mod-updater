@@ -16,7 +16,8 @@ internal sealed class UpdateOperationLog : IDisposable
     public static UpdateOperationLog Create(string modsPath, string modId)
     {
         var safeModsPath = PathGuard.NormalizePath(modsPath);
-        var logDirectory = Path.Combine(safeModsPath, ".vintage-mod-updater", "logs");
+        var workspacePath = UpdaterWorkspace.EnsureWorkspace(safeModsPath);
+        var logDirectory = Path.Combine(workspacePath, "logs");
         Directory.CreateDirectory(logDirectory);
 
         var fileName = $"update-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}_{Sanitize(modId)}.log";

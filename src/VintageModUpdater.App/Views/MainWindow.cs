@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using System.Diagnostics;
 using VintageModUpdater.App.ViewModels;
 
 namespace VintageModUpdater.App.Views;
@@ -16,6 +17,9 @@ public sealed class MainWindow : Window
     private readonly TextBox _modsPathBox = new();
     private readonly TextBlock _gameVersionText = new();
     private readonly TextBlock _summaryText = new();
+    private readonly Border _appUpdateBanner = new();
+    private readonly TextBlock _appUpdateBannerText = new();
+    private readonly Button _viewAppUpdateButton = new();
     private readonly TextBlock _statusText = new();
     private readonly StackPanel _modsPanel = new();
     private readonly StackPanel _backupsPanel = new();
@@ -31,6 +35,7 @@ public sealed class MainWindow : Window
     private static readonly IBrush AccentBrush = new SolidColorBrush(Color.Parse("#0f766e"));
     private static readonly IBrush LineBrush = new SolidColorBrush(Color.Parse("#d7d0c5"));
     private static readonly IBrush WarningBrush = new SolidColorBrush(Color.Parse("#a15c07"));
+    private static readonly IBrush BannerBrush = new SolidColorBrush(Color.Parse("#fff4cc"));
 
     public MainWindow()
     {
@@ -54,7 +59,7 @@ public sealed class MainWindow : Window
     {
         var root = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*,Auto"),
             Margin = new Thickness(24),
             RowSpacing = 16
         };
@@ -65,17 +70,52 @@ public sealed class MainWindow : Window
 
         var paths = BuildPathsPanel();
         root.Children.Add(paths);
-        Grid.SetRow(paths, 1);
+        Grid.SetRow(paths, 2);
+
+        var appUpdateBanner = BuildAppUpdateBanner();
+        root.Children.Add(appUpdateBanner);
+        Grid.SetRow(appUpdateBanner, 1);
 
         var tabs = BuildMainTabs();
         root.Children.Add(tabs);
-        Grid.SetRow(tabs, 2);
+        Grid.SetRow(tabs, 3);
 
         var status = BuildStatusBar();
         root.Children.Add(status);
-        Grid.SetRow(status, 3);
+        Grid.SetRow(status, 4);
 
         return root;
+    }
+
+    private Control BuildAppUpdateBanner()
+    {
+        _appUpdateBannerText.Foreground = WarningBrush;
+        _appUpdateBannerText.TextWrapping = TextWrapping.Wrap;
+        _appUpdateBannerText.VerticalAlignment = VerticalAlignment.Center;
+
+        _viewAppUpdateButton.Content = "View on ModDB";
+        _viewAppUpdateButton.MinWidth = 130;
+        _viewAppUpdateButton.Click += async (_, _) => await OpenAppUpdatePageAsync();
+
+        _appUpdateBanner.Background = BannerBrush;
+        _appUpdateBanner.BorderBrush = LineBrush;
+        _appUpdateBanner.BorderThickness = new Thickness(1);
+        _appUpdateBanner.CornerRadius = new CornerRadius(8);
+        _appUpdateBanner.Padding = new Thickness(12, 10);
+        _appUpdateBanner.IsVisible = false;
+        _appUpdateBanner.Child = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            ColumnSpacing = 12,
+            Children =
+            {
+                _appUpdateBannerText,
+                _viewAppUpdateButton
+            }
+        };
+        Grid.SetColumn(_viewAppUpdateButton, 1);
+
+        return _appUpdateBanner;
     }
 
     private Control BuildHeader()
@@ -260,12 +300,15 @@ public sealed class MainWindow : Window
     {
         _gameVersionText.Text = $"Vintage Story {_viewModel.GameVersion}";
         _summaryText.Text = _viewModel.Summary;
+        _appUpdateBanner.IsVisible = _viewModel.IsAppUpdateAvailable;
+        _appUpdateBannerText.Text = _viewModel.AppUpdateBannerText;
         _statusText.Text = _viewModel.StatusMessage;
         _progress.IsVisible = _viewModel.IsBusy;
 
         _scanButton.IsEnabled = !_viewModel.IsBusy;
         _checkButton.IsEnabled = !_viewModel.IsBusy;
         _updateAllButton.IsEnabled = !_viewModel.IsBusy && _viewModel.Mods.Any(mod => mod.CanUpdate);
+        _viewAppUpdateButton.IsEnabled = !_viewModel.IsBusy && _viewModel.IsAppUpdateAvailable;
     }
 
     private void PullPathInputs()
@@ -538,5 +581,23 @@ public sealed class MainWindow : Window
         button.Background = AccentBrush;
         button.Foreground = Brushes.White;
         return button;
+    }
+
+    private Task OpenAppUpdatePageAsync()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = _viewModel.OfficialAppModPageUrl,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // Opening the browser is best-effort and should not interrupt app usage.
+        }
+
+        return Task.CompletedTask;
     }
 }

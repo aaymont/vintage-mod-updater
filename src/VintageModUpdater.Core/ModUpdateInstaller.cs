@@ -171,8 +171,7 @@ public sealed class ModUpdateInstaller
         }
 
         var preserveDirectory = Path.Combine(
-            modsPath,
-            ".vintage-mod-updater",
+            UpdaterWorkspace.EnsureWorkspace(modsPath),
             "replaced-on-update",
             DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss"));
         PathGuard.EnsureNoReparsePointsUnderRoot(

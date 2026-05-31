@@ -72,6 +72,12 @@ public sealed record ScanResult(
     IReadOnlyList<InstalledMod> Mods,
     IReadOnlyList<BackupEntry> Backups);
 
+public sealed record AppUpdateStatus(
+    string CurrentVersion,
+    string? LatestVersion,
+    bool UpdateAvailable,
+    string ModPageUrl);
+
 public sealed class UpdaterSettings
 {
     public string? InstallPath { get; set; }
