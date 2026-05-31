@@ -2,7 +2,6 @@ namespace VintageModUpdater.Core;
 
 public sealed class ModUpdateInstaller
 {
-    private static readonly string OfficialModDbHost = "mods.vintagestory.at";
     private const long MaxDownloadBytes = 512L * 1024L * 1024L;
     private static readonly TimeSpan MaxDownloadTimeout = TimeSpan.FromMinutes(10);
 
@@ -43,8 +42,7 @@ public sealed class ModUpdateInstaller
             }
 
             var downloadUri = new Uri(update.DownloadUrl!);
-            if (!downloadUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-                || !downloadUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+            if (!ModDbTrustPolicy.IsTrustedDownloadEntryUri(downloadUri))
             {
                 throw new InvalidOperationException("Updates must be downloaded from the official Vintage Story ModDB.");
             }
@@ -80,10 +78,10 @@ public sealed class ModUpdateInstaller
                     response.EnsureSuccessStatusCode();
                     var finalUri = response.RequestMessage?.RequestUri ?? downloadUri;
                     log.WriteStep($"Download resolved to: {finalUri}");
-                    if (!finalUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-                        || !finalUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+                    if (!ModDbTrustPolicy.IsTrustedDownloadFinalUri(finalUri))
                     {
-                        throw new InvalidOperationException("Update downloads must resolve to the official secure Vintage Story ModDB host.");
+                        throw new InvalidOperationException(
+                            "Update downloads must resolve to an official Vintage Story ModDB host.");
                     }
 
                     if (response.Content.Headers.ContentLength is long contentLength

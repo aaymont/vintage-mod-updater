@@ -15,7 +15,9 @@ This document summarizes current security controls, known residual risks, and ho
 
 ### Network and download trust boundaries
 
-- Download and API URLs are restricted to `https://mods.vintagestory.at`.
+- Download entry URLs are restricted to `https://mods.vintagestory.at`.
+- Final download URLs after redirects may resolve to `https://mods.vintagestory.at` or the official CDN at `https://moddbcdn.vintagestory.at`.
+- ModDB API URLs are restricted to `https://mods.vintagestory.at`.
 - Final request URIs are revalidated after redirects before data is trusted.
 - Download and API requests use explicit timeout limits.
 - Download and API responses are size-limited while streaming.

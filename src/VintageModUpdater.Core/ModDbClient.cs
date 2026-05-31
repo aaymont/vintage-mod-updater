@@ -6,7 +6,6 @@ namespace VintageModUpdater.Core;
 public sealed class ModDbClient
 {
     private static readonly Uri BaseUri = new("https://mods.vintagestory.at");
-    private static readonly string OfficialModDbHost = "mods.vintagestory.at";
     private const int MaxApiResponseBytes = 2 * 1024 * 1024;
     private static readonly TimeSpan ModDbRequestTimeout = TimeSpan.FromSeconds(60);
     private readonly HttpClient _httpClient;
@@ -131,9 +130,7 @@ public sealed class ModDbClient
             .GetAsync(requestUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
         var finalUri = response.RequestMessage?.RequestUri;
-        if (finalUri is null
-            || !finalUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-            || !finalUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+        if (finalUri is null || !ModDbTrustPolicy.IsTrustedApiHost(finalUri))
         {
             throw new HttpRequestException("ModDB response originated from an unexpected host.");
         }
@@ -243,8 +240,7 @@ public sealed class ModDbClient
             ? absoluteUri
             : new Uri(BaseUri, fileUrl);
 
-        if (!resolvedUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-            || !resolvedUri.Host.Equals(OfficialModDbHost, StringComparison.OrdinalIgnoreCase))
+        if (!ModDbTrustPolicy.IsTrustedDownloadEntryUri(resolvedUri))
         {
             return null;
         }

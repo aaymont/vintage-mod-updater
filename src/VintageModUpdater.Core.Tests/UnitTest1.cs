@@ -10,6 +10,48 @@ namespace VintageModUpdater.Core.Tests;
 public sealed class SecurityHardeningTests
 {
     [Fact]
+    public async Task InstallUpdateAsync_AllowsOfficialModDbCdnRedirect()
+    {
+        using var temp = new TempDirectory();
+        var modsPath = Path.Combine(temp.Path, "Mods");
+        Directory.CreateDirectory(modsPath);
+
+        var installedPath = Path.Combine(modsPath, "awearablelight-v1.1.9.zip");
+        await File.WriteAllTextAsync(installedPath, "installed");
+
+        var installedMod = new InstalledMod(
+            Identifier: "awearablelight",
+            Name: "A Wearable Light",
+            Version: "1.1.9",
+            Path: installedPath,
+            FileName: "awearablelight-v1.1.9.zip",
+            IsDirectory: false,
+            Authors: Array.Empty<string>(),
+            GameVersions: Array.Empty<string>(),
+            Error: null);
+
+        var update = new ModUpdateStatus(
+            ModId: "awearablelight",
+            CurrentVersion: "1.1.9",
+            Kind: ModUpdateKind.UpdateAvailable,
+            AvailableVersion: "1.2.0",
+            DownloadFileName: "awearablelight-v1.2.0.zip",
+            DownloadUrl: "https://mods.vintagestory.at/download/96890/awearablelight-v1.2.0.zip",
+            ErrorCode: null,
+            Message: "update available");
+
+        var payload = CreateZipWithMod("awearablelight", "1.2.0");
+        var handler = new CdnRedirectResponseHandler(payload);
+        using var httpClient = new HttpClient(handler);
+        var installer = new ModUpdateInstaller(new BackupService(), httpClient);
+
+        var result = await installer.InstallUpdateAsync(installedMod, update, modsPath);
+
+        Assert.Equal(Path.Combine(modsPath, "awearablelight-v1.2.0.zip"), result.DestinationPath);
+        Assert.True(File.Exists(result.DestinationPath));
+    }
+
+    [Fact]
     public async Task InstallUpdateAsync_ReplacesZipModAndCreatesBackup()
     {
         using var temp = new TempDirectory();
@@ -332,6 +374,30 @@ public sealed class SecurityHardeningTests
         }
 
         return memory.ToArray();
+    }
+
+    private sealed class CdnRedirectResponseHandler : HttpMessageHandler
+    {
+        private readonly byte[] _payload;
+
+        public CdnRedirectResponseHandler(byte[] payload)
+        {
+            _payload = payload;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = new HttpRequestMessage(
+                    HttpMethod.Get,
+                    "https://moddbcdn.vintagestory.at/awearablelight-v1.2._bdeeb90989b76fc0599cfba9f2e2d497.zip?dl=awearablelight-v1.2.0.zip"),
+                Content = new ByteArrayContent(_payload)
+            };
+            response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+            response.Content.Headers.ContentLength = _payload.Length;
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class StaticResponseHandler : HttpMessageHandler
