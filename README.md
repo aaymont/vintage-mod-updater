@@ -127,6 +127,12 @@ macOS may warn that the app is from an unidentified developer until the project 
 
 Security controls, known limitations, and vulnerability reporting guidance are documented in [`Security.md`](Security.md).
 
+## License
+
+Copyright (C) 2026 Adrian Aymont
+
+This project is licensed under the [MIT License](LICENSE).
+
 ## Project Notes
 
 - The updater talks to the official [Vintage Story ModDB API](https://github.com/anegostudios/vsmoddb).
