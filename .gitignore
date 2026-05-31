@@ -1,0 +1,19 @@
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+TestResults/
+coverage/
+*.nupkg
+*.snupkg
+publish/
+artifacts/
+*.log
+
+# Vintage Mod Updater runtime state
+.vintage-mod-updater/

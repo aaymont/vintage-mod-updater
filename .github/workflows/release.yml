@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  PROJECT_PATH: "src/VintageModUpdater.App/VintageModUpdater.App.csproj"
+  SOLUTION_PATH: "vintage-mod-updater.sln"
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-latest
+            runtime: win-x64
+            artifact_name: vintage-mod-updater-win-x64
+            package_type: zip
+          - label: Linux x64
+            os: ubuntu-latest
+            runtime: linux-x64
+            artifact_name: vintage-mod-updater-linux-x64
+            package_type: tar
+          - label: macOS Intel
+            os: macos-latest
+            runtime: osx-x64
+            artifact_name: vintage-mod-updater-macos-x64
+            package_type: tar
+          - label: macOS Apple Silicon
+            os: macos-latest
+            runtime: osx-arm64
+            artifact_name: vintage-mod-updater-macos-arm64
+            package_type: tar
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore $env:SOLUTION_PATH --configfile NuGet.config
+
+      - name: Build
+        run: dotnet build $env:SOLUTION_PATH -c Release --no-restore
+
+      - name: Publish
+        run: >
+          dotnet publish $env:PROJECT_PATH
+          -c Release
+          -r ${{ matrix.runtime }}
+          --self-contained true
+          -p:RestoreConfigFile=NuGet.config
+          -p:PublishSingleFile=false
+          -p:PublishReadyToRun=false
+          -o "artifacts/publish/${{ matrix.artifact_name }}"
+
+      - name: Package Windows archive
+        if: matrix.package_type == 'zip'
+        run: >
+          Compress-Archive
+          -Path "artifacts/publish/${{ matrix.artifact_name }}/*"
+          -DestinationPath "artifacts/${{ matrix.artifact_name }}.zip"
+          -Force
+
+      - name: Package Unix archive
+        if: matrix.package_type == 'tar'
+        run: tar -czf "artifacts/${{ matrix.artifact_name }}.tar.gz" -C "artifacts/publish/${{ matrix.artifact_name }}" .
+
+      - name: Upload build archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts/${{ matrix.artifact_name }}.*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download build archives
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create release with generated changelog
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
