@@ -12,6 +12,21 @@ internal static class ModDbTrustPolicy
             && uri.Host.Equals(ModDbHost, StringComparison.OrdinalIgnoreCase);
     }
 
+    public static bool IsTrustedModPageUri(Uri uri)
+    {
+        if (!IsTrustedApiHost(uri))
+        {
+            return false;
+        }
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 3
+            && segments[0].Equals("show", StringComparison.OrdinalIgnoreCase)
+            && segments[1].Equals("mod", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(segments[2], out var assetId)
+            && assetId > 0;
+    }
+
     public static bool IsTrustedDownloadEntryUri(Uri uri)
     {
         return IsTrustedApiHost(uri);

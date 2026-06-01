@@ -380,6 +380,7 @@ public sealed class SecurityHardeningTests
         var body = """
         {
           "mod": {
+            "assetid": 53470,
             "releases": [
               { "modversion": "0.4.2" },
               { "modversion": "0.4.1" }
@@ -408,7 +409,162 @@ public sealed class SecurityHardeningTests
 
         Assert.True(status.UpdateAvailable);
         Assert.Equal("0.4.2", status.LatestVersion);
-        Assert.Equal("https://mods.vintagestory.at/vsmu", status.ModPageUrl);
+        Assert.Equal("https://mods.vintagestory.at/show/mod/53470", status.ModPageUrl);
+    }
+
+    [Fact]
+    public void ModSnapshotCsv_BuildsRowsWithDefaultUpdateFlag()
+    {
+        var mods = new[]
+        {
+            new InstalledMod(
+                "walkingstick",
+                "Walking Stick",
+                "3.0.9",
+                "walkingstick.zip",
+                "walkingstick.zip",
+                false,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                null),
+            new InstalledMod(
+                "broken",
+                "Broken",
+                "1.0.0",
+                "broken.zip",
+                "broken.zip",
+                false,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                "invalid modinfo")
+        };
+
+        var csv = ModSnapshotCsv.Build(ModSnapshotCsv.CreateEntriesFromInstalledMods(mods));
+
+        Assert.Contains("modid,version,update", csv, StringComparison.Ordinal);
+        Assert.Contains("walkingstick,3.0.9,true", csv, StringComparison.Ordinal);
+        Assert.DoesNotContain("broken", csv, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ModSnapshotCsv_EscapesCommasInFields()
+    {
+        var csv = ModSnapshotCsv.Build(new[]
+        {
+            new ModSnapshotEntry("coolmod", "1.0,rc.1", false)
+        });
+
+        Assert.Contains("coolmod,\"1.0,rc.1\",false", csv, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FormatRange_FormatsSortedGameVersionSpan()
+    {
+        Assert.Equal("1.22.0 - 1.22.2", GameVersionDisplay.FormatRange(new[] { "1.22.2", "1.22.0", "1.22.1" }));
+        Assert.Equal("1.22.0", GameVersionDisplay.FormatRange(new[] { "1.22.0" }));
+        Assert.Null(GameVersionDisplay.FormatRange(Array.Empty<string>()));
+    }
+
+    [Fact]
+    public void GetModPageUrl_BuildsTrustedShowModUrl()
+    {
+        Assert.Equal("https://mods.vintagestory.at/show/mod/34545", ModDbUrls.GetModPageUrl(34545));
+        Assert.Null(ModDbUrls.GetModPageUrl(0));
+        Assert.Null(ModDbUrls.GetModPageUrl(-1));
+        Assert.True(ModDbUrls.IsAllowedBrowserUrl("https://mods.vintagestory.at/show/mod/34545"));
+        Assert.False(ModDbUrls.IsAllowedBrowserUrl("https://mods.vintagestory.at/awearablelight"));
+    }
+
+    [Fact]
+    public async Task TryResolveAssetIdAsync_ReadsAssetIdFromModApi()
+    {
+        var body = """
+        {
+          "mod": {
+            "modid": 5845,
+            "assetid": 34545,
+            "name": "Adventurer's Walking Stick",
+            "releases": [
+              {
+                "modversion": "3.0.9",
+                "tags": ["1.22.2", "1.22.0", "1.22.1"]
+              },
+              {
+                "modversion": "3.0.10",
+                "tags": ["1.22.2", "1.22.3"]
+              }
+            ]
+          }
+        }
+        """;
+
+        var handler = new DynamicResponseHandler(request =>
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mods.vintagestory.at")
+        };
+        var client = new ModDbClient(httpClient);
+
+        var reference = await client.TryResolveModReferenceAsync("walkingstick");
+
+        Assert.NotNull(reference);
+        Assert.Equal(34545, reference.AssetId);
+        Assert.Equal("https://mods.vintagestory.at/show/mod/34545", ModDbUrls.GetModPageUrl(reference.AssetId));
+        Assert.Equal("1.22.0 - 1.22.2", reference.ReleaseGameVersionsByModVersion["3.0.9"]);
+        Assert.Equal("1.22.2 - 1.22.3", reference.ReleaseGameVersionsByModVersion["3.0.10"]);
+    }
+
+    [Fact]
+    public void ResolveGameVersion_UsesOverrideWhenSet()
+    {
+        Assert.Equal("1.20.0", VintageModUpdaterService.ResolveGameVersion("1.22.2", "1.20.0"));
+        Assert.Equal("1.22.2", VintageModUpdaterService.ResolveGameVersion("1.22.2", null));
+        Assert.Equal("1.22.2", VintageModUpdaterService.ResolveGameVersion("1.22.2", "   "));
+    }
+
+    [Fact]
+    public async Task GetGameVersionsAsync_ParsesLegacyGameVersionsResponse()
+    {
+        var body = """
+        {
+          "statuscode": "200",
+          "gameversions": [
+            { "name": "1.20.0" },
+            { "name": "1.22.2" },
+            { "name": "1.21.0" }
+          ]
+        }
+        """;
+
+        var handler = new DynamicResponseHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = path.Contains("/api/gameversions", StringComparison.Ordinal)
+                    ? new StringContent(body, Encoding.UTF8, "application/json")
+                    : new StringContent("{}", Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mods.vintagestory.at")
+        };
+        var client = new ModDbClient(httpClient);
+
+        var versions = await client.GetGameVersionsAsync();
+
+        Assert.Equal(new[] { "1.22.2", "1.21.0", "1.20.0" }, versions);
     }
 
     [Fact]

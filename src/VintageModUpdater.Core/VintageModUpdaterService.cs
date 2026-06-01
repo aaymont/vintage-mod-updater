@@ -42,7 +42,8 @@ public sealed class VintageModUpdaterService
         var installPath = !string.IsNullOrWhiteSpace(settings.InstallPath)
             ? settings.InstallPath
             : paths.InstallPath;
-        var gameVersion = _versionReader.TryReadGameVersion(installPath);
+        var detectedGameVersion = _versionReader.TryReadGameVersion(installPath);
+        var gameVersion = ResolveGameVersion(detectedGameVersion, settings.GameVersionOverride);
         var modsPath = !string.IsNullOrWhiteSpace(settings.ModsPath)
             ? settings.ModsPath
             : paths.ModsPath;
@@ -56,9 +57,49 @@ public sealed class VintageModUpdaterService
                 InstallPath = installPath,
                 ModsPath = modsPath
             },
+            detectedGameVersion,
             gameVersion,
             mods,
             backups);
+    }
+
+    public Task<IReadOnlyList<string>> GetGameVersionsAsync(CancellationToken cancellationToken = default)
+    {
+        return _modDbClient.GetGameVersionsAsync(cancellationToken);
+    }
+
+    public Task<int?> TryResolveModAssetIdAsync(string modIdentifier, CancellationToken cancellationToken = default)
+    {
+        return _modDbClient.TryResolveAssetIdAsync(modIdentifier, cancellationToken);
+    }
+
+    public Task<ModDbModReference?> TryResolveModReferenceAsync(
+        string modIdentifier,
+        CancellationToken cancellationToken = default)
+    {
+        return _modDbClient.TryResolveModReferenceAsync(modIdentifier, cancellationToken);
+    }
+
+    public Task<IReadOnlyDictionary<string, int>> ResolveModAssetIdsAsync(
+        IEnumerable<string> modIdentifiers,
+        CancellationToken cancellationToken = default)
+    {
+        return _modDbClient.ResolveModAssetIdsAsync(modIdentifiers, cancellationToken);
+    }
+
+    public Task<IReadOnlyDictionary<string, ModDbModReference>> ResolveModReferencesAsync(
+        IEnumerable<string> modIdentifiers,
+        CancellationToken cancellationToken = default)
+    {
+        return _modDbClient.ResolveModReferencesAsync(modIdentifiers, cancellationToken);
+    }
+
+    public static string? ResolveGameVersion(string? detectedGameVersion, string? gameVersionOverride)
+    {
+        var normalizedOverride = string.IsNullOrWhiteSpace(gameVersionOverride)
+            ? null
+            : gameVersionOverride.Trim();
+        return normalizedOverride ?? detectedGameVersion;
     }
 
     private static void EnsureUpdaterWorkspaceForScan(string modsPath)

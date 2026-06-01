@@ -20,4 +20,13 @@ public sealed class BackupRowViewModel
     public string CreatedAt => Backup.CreatedAt.LocalDateTime.ToString("g");
 
     public string SourceFile => Path.GetFileName(Backup.OriginalPath);
+
+    public int? ModDbAssetId { get; private set; }
+
+    public string? ModPageUrl => ModDbUrls.GetModPageUrl(ModDbAssetId);
+
+    public void SetModDbAssetId(int? assetId)
+    {
+        ModDbAssetId = assetId;
+    }
 }

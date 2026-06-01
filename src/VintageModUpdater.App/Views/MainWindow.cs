@@ -7,6 +7,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using System.Diagnostics;
 using VintageModUpdater.App.ViewModels;
+using VintageModUpdater.Core;
 
 namespace VintageModUpdater.App.Views;
 
@@ -15,6 +16,8 @@ public sealed class MainWindow : Window
     private readonly MainViewModel _viewModel = new();
     private readonly TextBox _installPathBox = new();
     private readonly TextBox _modsPathBox = new();
+    private readonly ComboBox _gameVersionCombo = new();
+    private bool _syncingGameVersionCombo;
     private readonly TextBlock _gameVersionText = new();
     private readonly TextBlock _summaryText = new();
     private readonly Border _appUpdateBanner = new();
@@ -27,6 +30,7 @@ public sealed class MainWindow : Window
     private readonly Button _scanButton = new();
     private readonly Button _checkButton = new();
     private readonly Button _updateAllButton = new();
+    private readonly Button _exportSnapshotButton = new();
 
     private static readonly IBrush PageBrush = new SolidColorBrush(Color.Parse("#f6f3ed"));
     private static readonly IBrush PanelBrush = new SolidColorBrush(Color.Parse("#fffdf8"));
@@ -126,7 +130,7 @@ public sealed class MainWindow : Window
         _summaryText.FontSize = 18;
         _summaryText.FontWeight = FontWeight.SemiBold;
 
-        _scanButton.Content = "Scan";
+        _scanButton.Content = "Refresh Mods & Backups";
         _scanButton.Click += async (_, _) =>
         {
             PullPathInputs();
@@ -150,6 +154,10 @@ public sealed class MainWindow : Window
             SyncFromViewModel();
         };
 
+        _exportSnapshotButton.Content = "Export Snapshot";
+        _exportSnapshotButton.MinWidth = 126;
+        _exportSnapshotButton.Click += async (_, _) => await ExportModSnapshotAsync();
+
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -157,6 +165,7 @@ public sealed class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Children =
             {
+                _exportSnapshotButton,
                 _scanButton,
                 AccentButton(_checkButton),
                 AccentButton(_updateAllButton)
@@ -198,6 +207,18 @@ public sealed class MainWindow : Window
         _installPathBox.Watermark = "Vintage Story install path";
         _modsPathBox.Watermark = "Mods folder";
 
+        _gameVersionCombo.PlaceholderText = "Select game version";
+        _gameVersionCombo.SelectionChanged += async (_, _) =>
+        {
+            if (_syncingGameVersionCombo || _gameVersionCombo.SelectedItem is not string selected)
+            {
+                return;
+            }
+
+            await _viewModel.SetGameVersionSelectionAsync(selected);
+            SyncChrome();
+        };
+
         var panel = new Border
         {
             Background = PanelBrush,
@@ -207,7 +228,7 @@ public sealed class MainWindow : Window
             Padding = new Thickness(16),
             Child = new Grid
             {
-                RowDefinitions = new RowDefinitions("Auto,Auto"),
+                RowDefinitions = new RowDefinitions("Auto,Auto,Auto"),
                 ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
                 RowSpacing = 10,
                 ColumnSpacing = 10,
@@ -218,7 +239,9 @@ public sealed class MainWindow : Window
                     BrowseButton("Browse", BrowseInstallPathAsync),
                     PathLabel("Mods Directory"),
                     _modsPathBox,
-                    BrowseButton("Browse", BrowseModsPathAsync)
+                    BrowseButton("Browse", BrowseModsPathAsync),
+                    PathLabel("Game Version"),
+                    _gameVersionCombo
                 }
             }
         };
@@ -231,6 +254,10 @@ public sealed class MainWindow : Window
         Grid.SetColumn(_modsPathBox, 1);
         Grid.SetRow(grid.Children[5], 1);
         Grid.SetColumn(grid.Children[5], 2);
+        Grid.SetRow(grid.Children[6], 2);
+        Grid.SetRow(_gameVersionCombo, 2);
+        Grid.SetColumn(_gameVersionCombo, 1);
+        Grid.SetColumnSpan(_gameVersionCombo, 2);
 
         return panel;
     }
@@ -290,6 +317,7 @@ public sealed class MainWindow : Window
     {
         _installPathBox.Text = _viewModel.InstallPath;
         _modsPathBox.Text = _viewModel.ModsPath;
+        SyncGameVersionCombo();
         SyncChrome();
 
         RenderMods();
@@ -298,23 +326,49 @@ public sealed class MainWindow : Window
 
     private void SyncChrome()
     {
-        _gameVersionText.Text = $"Vintage Story {_viewModel.GameVersion}";
+        _gameVersionText.Text = _viewModel.GameVersionHeaderText;
         _summaryText.Text = _viewModel.Summary;
         _appUpdateBanner.IsVisible = _viewModel.IsAppUpdateAvailable;
         _appUpdateBannerText.Text = _viewModel.AppUpdateBannerText;
         _statusText.Text = _viewModel.StatusMessage;
         _progress.IsVisible = _viewModel.IsBusy;
 
+        _exportSnapshotButton.IsEnabled = !_viewModel.IsBusy && _viewModel.CanExportSnapshot;
         _scanButton.IsEnabled = !_viewModel.IsBusy;
         _checkButton.IsEnabled = !_viewModel.IsBusy;
         _updateAllButton.IsEnabled = !_viewModel.IsBusy && _viewModel.Mods.Any(mod => mod.CanUpdate);
         _viewAppUpdateButton.IsEnabled = !_viewModel.IsBusy && _viewModel.IsAppUpdateAvailable;
+        _gameVersionCombo.IsEnabled = !_viewModel.IsBusy;
     }
 
     private void PullPathInputs()
     {
         _viewModel.InstallPath = _installPathBox.Text ?? "";
         _viewModel.ModsPath = _modsPathBox.Text ?? "";
+    }
+
+    private void SyncGameVersionCombo()
+    {
+        _syncingGameVersionCombo = true;
+        try
+        {
+            _gameVersionCombo.ItemsSource = _viewModel.GameVersionOptions;
+            var selected = _viewModel.SelectedGameVersionOption;
+            if (_viewModel.GameVersionOptions.Contains(selected, StringComparer.Ordinal))
+            {
+                _gameVersionCombo.SelectedItem = selected;
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(selected))
+            {
+                _gameVersionCombo.SelectedItem = selected;
+            }
+        }
+        finally
+        {
+            _syncingGameVersionCombo = false;
+        }
     }
 
     private void RenderMods()
@@ -369,10 +423,10 @@ public sealed class MainWindow : Window
 
         return DataRow(
             Cell(StackText(row.Name, row.Identifier)),
-            Cell(row.Version),
-            Cell(row.StatusText, row.CanUpdate ? WarningBrush : MutedBrush),
+            Cell(VersionCell(row.Version, row.InstalledForGameVersionText)),
+            Cell(StatusCell(row)),
             Cell(row.FileName),
-            updateButton);
+            ActionCell(ModPageButton(row), updateButton));
     }
 
     private Control BackupRow(BackupRowViewModel row)
@@ -394,7 +448,7 @@ public sealed class MainWindow : Window
             Cell(row.Version),
             Cell(row.CreatedAt),
             Cell(row.SourceFile),
-            restoreButton);
+            ActionCell(ModPageButton(row.Identifier, () => row.ModPageUrl), restoreButton));
     }
 
     private static Control HeaderRow(params string[] labels)
@@ -463,29 +517,109 @@ public sealed class MainWindow : Window
         return control;
     }
 
+    private static Control ActionCell(params Control[] controls)
+    {
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        foreach (var control in controls)
+        {
+            panel.Children.Add(control);
+        }
+
+        return panel;
+    }
+
+    private Button ModPageButton(ModRowViewModel row)
+    {
+        return ModPageButton(row.Identifier, () => row.ModPageUrl);
+    }
+
+    private Button ModPageButton(string modIdentifier, Func<string?> getModPageUrl)
+    {
+        var button = new Button
+        {
+            Content = "ModDB",
+            MinWidth = 72,
+            IsEnabled = !string.IsNullOrWhiteSpace(modIdentifier) && !_viewModel.IsBusy
+        };
+        button.Click += async (_, _) =>
+        {
+            await _viewModel.EnsureModPageLinkAsync(modIdentifier);
+            OpenUrl(getModPageUrl());
+        };
+        return button;
+    }
+
+    private static Control VersionCell(string version, string? forGameVersion)
+    {
+        return StackText(version, FormatForGameVersionLine(forGameVersion), mutedBrush: null);
+    }
+
+    private static Control StatusCell(ModRowViewModel row)
+    {
+        return StackText(
+            row.StatusText,
+            FormatForGameVersionLine(row.UpdateForGameVersionText),
+            mutedBrush: row.CanUpdate ? WarningBrush : null);
+    }
+
+    private static string? FormatForGameVersionLine(string? forGameVersion)
+    {
+        return string.IsNullOrWhiteSpace(forGameVersion)
+            ? null
+            : $"For game: {forGameVersion}";
+    }
+
+    private static Control StackText(
+        string primary,
+        string? secondary,
+        string? tertiary = null,
+        IBrush? mutedBrush = null,
+        IBrush? secondaryMutedBrush = null)
+    {
+        var secondaryBrush = secondaryMutedBrush ?? mutedBrush ?? MutedBrush;
+        var panel = new StackPanel { Spacing = 2 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = primary,
+            Foreground = mutedBrush ?? InkBrush,
+            FontWeight = FontWeight.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        if (!string.IsNullOrWhiteSpace(secondary))
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = secondary,
+                Foreground = secondaryBrush,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(tertiary))
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = tertiary,
+                Foreground = MutedBrush,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        return panel;
+    }
+
     private static Control StackText(string primary, string secondary)
     {
-        return new StackPanel
-        {
-            Spacing = 2,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = primary,
-                    Foreground = InkBrush,
-                    FontWeight = FontWeight.SemiBold,
-                    TextWrapping = TextWrapping.Wrap
-                },
-                new TextBlock
-                {
-                    Text = secondary,
-                    Foreground = MutedBrush,
-                    FontSize = 12,
-                    TextWrapping = TextWrapping.Wrap
-                }
-            }
-        };
+        return StackText(primary, secondary, mutedBrush: null);
     }
 
     private static Control EmptyState(string text)
@@ -585,11 +719,69 @@ public sealed class MainWindow : Window
 
     private Task OpenAppUpdatePageAsync()
     {
+        OpenUrl(_viewModel.OfficialAppModPageUrl);
+        return Task.CompletedTask;
+    }
+
+    private async Task ExportModSnapshotAsync()
+    {
+        if (!_viewModel.CanExportSnapshot)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.StorageProvider.CanSave != true)
+        {
+            return;
+        }
+
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export mod snapshot",
+            SuggestedFileName = _viewModel.SuggestModSnapshotFileName(),
+            DefaultExtension = "csv",
+            FileTypeChoices =
+            [
+                new FilePickerFileType("CSV files")
+                {
+                    Patterns = new[] { "*.csv" }
+                }
+            ]
+        });
+
+        if (file is null)
+        {
+            return;
+        }
+
+        var path = file.TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        await _viewModel.ExportModSnapshotToFileAsync(path);
+        SyncChrome();
+    }
+
+    private static void OpenUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return;
+        }
+
+        if (!ModDbUrls.IsAllowedBrowserUrl(url))
+        {
+            return;
+        }
+
         try
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = _viewModel.OfficialAppModPageUrl,
+                FileName = url,
                 UseShellExecute = true
             });
         }
@@ -597,7 +789,5 @@ public sealed class MainWindow : Window
         {
             // Opening the browser is best-effort and should not interrupt app usage.
         }
-
-        return Task.CompletedTask;
     }
 }

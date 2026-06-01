@@ -1,13 +1,13 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace VintageModUpdater.Core;
 
-public sealed class ModDbClient
+public sealed partial class ModDbClient
 {
     private static readonly Uri BaseUri = new("https://mods.vintagestory.at");
     private const int UpdaterModNumericId = 9231;
-    private const string UpdaterModPageUrl = "https://mods.vintagestory.at/vsmu";
     private const int MaxApiResponseBytes = 2 * 1024 * 1024;
     private static readonly TimeSpan ModDbRequestTimeout = TimeSpan.FromSeconds(60);
     private readonly HttpClient _httpClient;
@@ -119,6 +119,77 @@ public sealed class ModDbClient
         return statuses;
     }
 
+    public async Task<IReadOnlyList<string>> GetGameVersionsAsync(CancellationToken cancellationToken = default)
+    {
+        var versions = await TryGetGameVersionsV2Async(cancellationToken).ConfigureAwait(false);
+        if (versions.Count > 0)
+        {
+            return versions;
+        }
+
+        return await GetGameVersionsLegacyAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<int?> TryResolveAssetIdAsync(string modIdentifier, CancellationToken cancellationToken = default)
+    {
+        var reference = await TryResolveModReferenceCoreAsync(modIdentifier, cancellationToken).ConfigureAwait(false);
+        return reference?.AssetId;
+    }
+
+    public Task<ModDbModReference?> TryResolveModReferenceAsync(
+        string modIdentifier,
+        CancellationToken cancellationToken = default)
+    {
+        return TryResolveModReferenceCoreAsync(modIdentifier, cancellationToken);
+    }
+
+    public async Task<IReadOnlyDictionary<string, int>> ResolveModAssetIdsAsync(
+        IEnumerable<string> modIdentifiers,
+        CancellationToken cancellationToken = default)
+    {
+        var references = await ResolveModReferencesAsync(modIdentifiers, cancellationToken).ConfigureAwait(false);
+        return references.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.AssetId,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    public async Task<IReadOnlyDictionary<string, ModDbModReference>> ResolveModReferencesAsync(
+        IEnumerable<string> modIdentifiers,
+        CancellationToken cancellationToken = default)
+    {
+        var identifiers = modIdentifiers
+            .Where(identifier => !string.IsNullOrWhiteSpace(identifier))
+            .Select(identifier => identifier.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var results = new Dictionary<string, ModDbModReference>(StringComparer.OrdinalIgnoreCase);
+        using var gate = new SemaphoreSlim(6);
+        var tasks = identifiers.Select(async identifier =>
+        {
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var reference = await TryResolveModReferenceCoreAsync(identifier, cancellationToken).ConfigureAwait(false);
+                if (reference is not null)
+                {
+                    lock (results)
+                    {
+                        results[identifier] = reference;
+                    }
+                }
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+        return results;
+    }
+
     public async Task<AppUpdateStatus> CheckUpdaterAppUpdateAsync(
         string currentVersion,
         CancellationToken cancellationToken = default)
@@ -156,18 +227,252 @@ public sealed class ModDbClient
         if (!document.RootElement.TryGetProperty("mod", out var modElement)
             || modElement.ValueKind != JsonValueKind.Object)
         {
-            return new AppUpdateStatus(normalizedCurrentVersion, null, UpdateAvailable: false, UpdaterModPageUrl);
+            return new AppUpdateStatus(
+                normalizedCurrentVersion,
+                null,
+                UpdateAvailable: false,
+                ModDbUrls.BaseUri.ToString());
         }
 
         var latestVersion = ReadLatestReleaseVersion(modElement);
         var updateAvailable = !string.IsNullOrWhiteSpace(latestVersion)
             && VersionComparer.IsNewer(latestVersion, normalizedCurrentVersion);
+        var modPageUrl = ModDbUrls.GetModPageUrl(ReadInt(modElement, "assetid"))
+            ?? ModDbUrls.BaseUri.ToString();
 
         return new AppUpdateStatus(
             normalizedCurrentVersion,
             latestVersion,
             updateAvailable,
-            UpdaterModPageUrl);
+            modPageUrl);
+    }
+
+    private async Task<ModDbModReference?> TryResolveModReferenceCoreAsync(
+        string modIdentifier,
+        CancellationToken cancellationToken)
+    {
+        if (!IsValidModApiKey(modIdentifier))
+        {
+            return null;
+        }
+
+        using var response = await _httpClient
+            .GetAsync($"/api/mod/{Uri.EscapeDataString(modIdentifier)}", HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        var finalUri = response.RequestMessage?.RequestUri;
+        if (finalUri is null || !ModDbTrustPolicy.IsTrustedApiHost(finalUri) || !response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        if (response.Content.Headers.ContentLength is long contentLength && contentLength > MaxApiResponseBytes)
+        {
+            return null;
+        }
+
+        var body = await ReadResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        });
+
+        if (!document.RootElement.TryGetProperty("mod", out var modElement)
+            || modElement.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var assetId = ReadInt(modElement, "assetid");
+        if (assetId is not > 0)
+        {
+            return null;
+        }
+
+        return new ModDbModReference(assetId.Value, ParseReleaseGameVersions(modElement));
+    }
+
+    private static IReadOnlyDictionary<string, string> ParseReleaseGameVersions(JsonElement modElement)
+    {
+        var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!TryGetProperty(modElement, "releases", out var releasesElement)
+            || releasesElement.ValueKind != JsonValueKind.Array)
+        {
+            return results;
+        }
+
+        foreach (var release in releasesElement.EnumerateArray())
+        {
+            var modVersion = ReadString(release, "modversion", "version");
+            if (string.IsNullOrWhiteSpace(modVersion))
+            {
+                continue;
+            }
+
+            var formatted = GameVersionDisplay.FormatRange(ReadStringArray(release, "tags", "gameversions", "gameVersions"));
+            if (formatted is not null)
+            {
+                results[modVersion.Trim()] = formatted;
+            }
+        }
+
+        return results;
+    }
+
+    private static IEnumerable<string> ReadStringArray(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!TryGetProperty(element, name, out var property) || property.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var item in property.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    var value = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        yield return value;
+                    }
+                }
+            }
+
+            yield break;
+        }
+    }
+
+    private static bool IsValidModApiKey(string modIdentifier)
+    {
+        return !string.IsNullOrWhiteSpace(modIdentifier)
+            && ModApiKeyPattern().IsMatch(modIdentifier.Trim());
+    }
+
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9._-]*$")]
+    private static partial Regex ModApiKeyPattern();
+
+    private async Task<IReadOnlyList<string>> TryGetGameVersionsV2Async(CancellationToken cancellationToken)
+    {
+        using var response = await _httpClient
+            .GetAsync("/api/v2/game-versions", HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        var finalUri = response.RequestMessage?.RequestUri;
+        if (finalUri is null || !ModDbTrustPolicy.IsTrustedApiHost(finalUri) || !response.IsSuccessStatusCode)
+        {
+            return Array.Empty<string>();
+        }
+
+        if (response.Content.Headers.ContentLength is long contentLength && contentLength > MaxApiResponseBytes)
+        {
+            return Array.Empty<string>();
+        }
+
+        var body = await ReadResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        });
+
+        if (document.RootElement.ValueKind == JsonValueKind.Array)
+        {
+            return ParseAndSortGameVersionNames(document.RootElement);
+        }
+
+        if (document.RootElement.ValueKind == JsonValueKind.Object
+            && TryGetProperty(document.RootElement, "data", out var data)
+            && data.ValueKind == JsonValueKind.Array)
+        {
+            return ParseAndSortGameVersionNames(data);
+        }
+
+        return Array.Empty<string>();
+    }
+
+    private async Task<IReadOnlyList<string>> GetGameVersionsLegacyAsync(CancellationToken cancellationToken)
+    {
+        using var response = await _httpClient
+            .GetAsync("/api/gameversions", HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        var finalUri = response.RequestMessage?.RequestUri;
+        if (finalUri is null || !ModDbTrustPolicy.IsTrustedApiHost(finalUri))
+        {
+            throw new HttpRequestException("ModDB response originated from an unexpected host.");
+        }
+
+        if (response.Content.Headers.ContentLength is long contentLength && contentLength > MaxApiResponseBytes)
+        {
+            throw new HttpRequestException("ModDB returned an unexpectedly large response body.");
+        }
+
+        var body = await ReadResponseBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"ModDB returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}",
+                null,
+                response.StatusCode);
+        }
+
+        using var document = JsonDocument.Parse(body, new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        });
+
+        if (!TryGetProperty(document.RootElement, "gameversions", out var gameVersions)
+            || gameVersions.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        var names = new List<string>();
+        foreach (var entry in gameVersions.EnumerateArray())
+        {
+            var name = ReadString(entry, "name");
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                names.Add(name.Trim());
+            }
+        }
+
+        return SortGameVersionNames(names);
+    }
+
+    private static IReadOnlyList<string> ParseAndSortGameVersionNames(JsonElement arrayElement)
+    {
+        var names = new List<string>();
+        foreach (var entry in arrayElement.EnumerateArray())
+        {
+            if (entry.ValueKind == JsonValueKind.String)
+            {
+                var value = entry.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    names.Add(value.Trim());
+                }
+
+                continue;
+            }
+
+            var name = ReadString(entry, "name", "gameversion", "version");
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                names.Add(name.Trim());
+            }
+        }
+
+        return SortGameVersionNames(names);
+    }
+
+    private static IReadOnlyList<string> SortGameVersionNames(IEnumerable<string> names)
+    {
+        return names
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(name => name, Comparer<string>.Create(VersionComparer.Compare))
+            .ToArray();
     }
 
     private async Task<IReadOnlyDictionary<string, InstallInformation>> RequestInstallInformationAsync(
@@ -393,6 +698,29 @@ public sealed class ModDbClient
             if (TryGetProperty(element, name, out var property) && property.ValueKind == JsonValueKind.String)
             {
                 return property.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static int? ReadInt(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!TryGetProperty(element, name, out var property))
+            {
+                continue;
+            }
+
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var value))
+            {
+                return value;
+            }
+
+            if (property.ValueKind == JsonValueKind.String && int.TryParse(property.GetString(), out value))
+            {
+                return value;
             }
         }
 

@@ -68,6 +68,7 @@ public sealed record ModUpdateInstallResult(
 
 public sealed record ScanResult(
     VintageStoryPaths Paths,
+    string? DetectedGameVersion,
     string? GameVersion,
     IReadOnlyList<InstalledMod> Mods,
     IReadOnlyList<BackupEntry> Backups);
@@ -83,4 +84,6 @@ public sealed class UpdaterSettings
     public string? InstallPath { get; set; }
 
     public string? ModsPath { get; set; }
+
+    public string? GameVersionOverride { get; set; }
 }

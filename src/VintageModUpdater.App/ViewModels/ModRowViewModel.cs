@@ -6,6 +6,8 @@ namespace VintageModUpdater.App.ViewModels;
 
 public sealed class ModRowViewModel : INotifyPropertyChanged
 {
+    private IReadOnlyDictionary<string, string>? _releaseGameVersionsByModVersion;
+
     public ModRowViewModel(RuntimeMod mod)
     {
         Mod = mod;
@@ -24,6 +26,14 @@ public sealed class ModRowViewModel : INotifyPropertyChanged
     public string Version => string.IsNullOrWhiteSpace(Mod.Version) ? "Unknown" : Mod.Version;
 
     public string FileName => Mod.FileName;
+
+    public int? ModDbAssetId { get; private set; }
+
+    public string? ModPageUrl => ModDbUrls.GetModPageUrl(ModDbAssetId);
+
+    public string? InstalledForGameVersionText => ResolveInstalledForGameVersionText();
+
+    public string? UpdateForGameVersionText => ResolveUpdateForGameVersionText();
 
     public string StatusText
     {
@@ -58,6 +68,61 @@ public sealed class ModRowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(CanUpdate));
         OnPropertyChanged(nameof(UpdateButtonText));
+        OnPropertyChanged(nameof(UpdateForGameVersionText));
+    }
+
+    public void SetModDbReference(ModDbModReference reference)
+    {
+        SetModDbAssetId(reference.AssetId);
+        _releaseGameVersionsByModVersion = reference.ReleaseGameVersionsByModVersion;
+        OnPropertyChanged(nameof(InstalledForGameVersionText));
+        OnPropertyChanged(nameof(UpdateForGameVersionText));
+    }
+
+    public void SetModDbAssetId(int? assetId)
+    {
+        if (ModDbAssetId == assetId)
+        {
+            return;
+        }
+
+        ModDbAssetId = assetId;
+        OnPropertyChanged(nameof(ModDbAssetId));
+        OnPropertyChanged(nameof(ModPageUrl));
+    }
+
+    private string? ResolveInstalledForGameVersionText()
+    {
+        var fromModInfo = GameVersionDisplay.FormatRange(Mod.GameVersions);
+        if (!string.IsNullOrWhiteSpace(fromModInfo))
+        {
+            return fromModInfo;
+        }
+
+        return LookupReleaseGameVersions(Mod.Version);
+    }
+
+    private string? ResolveUpdateForGameVersionText()
+    {
+        if (UpdateStatus?.Kind != ModUpdateKind.UpdateAvailable)
+        {
+            return null;
+        }
+
+        return LookupReleaseGameVersions(UpdateStatus.AvailableVersion);
+    }
+
+    private string? LookupReleaseGameVersions(string? modVersion)
+    {
+        if (string.IsNullOrWhiteSpace(modVersion)
+            || _releaseGameVersionsByModVersion is null)
+        {
+            return null;
+        }
+
+        return _releaseGameVersionsByModVersion.TryGetValue(modVersion.Trim(), out var formatted)
+            ? formatted
+            : null;
     }
 
     private void OnPropertyChanged(string propertyName)
